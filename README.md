@@ -1,0 +1,18 @@
+# Bancada
+
+Sistema de gestão para marcenaria. Abra `index.html` no navegador para usar a versão local desta pasta.
+
+## Publicar no GitHub Pages
+
+1. Crie um repositório chamado `bancada` na sua conta do GitHub. No plano gratuito, o GitHub Pages exige um repositório público.
+2. Envie os arquivos desta pasta para a raiz da branch `main`.
+3. Abra **Settings → Pages**. Em **Build and deployment**, selecione **Deploy from a branch**, escolha **main** e **/ (root)**, e salve.
+4. Abra o endereço exibido na tela de Pages. Para um repositório `bancada` na conta `peresmayda`, o endereço padrão é `https://peresmayda.github.io/bancada/`.
+
+[Configuração do GitHub Pages](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
+
+## Começar a usar
+
+- Para trazer os lançamentos e ajustes da versão local, exporte um backup em **Ajustes** na versão local. Abra o endereço novo e use **Restaurar backup** em **Ajustes**. O arquivo de backup contém dados da operação e deve ficar fora do repositório.
+- Para começar do zero, preencha os dados da marcenaria, os custos da oficina e a equipe em **Ajustes**. Os preços de referência do catálogo MDF vêm junto com o aplicativo.
+- Cada navegador guarda sua própria base. Para transferir os dados entre dispositivos ou endereços, use o backup do Bancada.
