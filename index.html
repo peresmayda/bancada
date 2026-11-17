@@ -922,6 +922,7 @@ function setPath(o,p,v){var ks=p.split('.');var last=ks.pop();var t=ks.reduce(fu
 
 /* ---------- estado ---------- */
 var S=null, cap=null, capTried=false, readOnly=false, pubTimer=null, publishing=false;
+var cloudEnabled=window.bancadaCloudRequired===true,cloud=null,cloudProfile='';
 var ui={sideC:(function(){try{return localStorage.getItem('bancada-side')==='1'}catch(e){return false}})(),view:'inicio',quoteId:null,draft:null,qFilter:'todos',qSearch:'',cSearch:'',dTab:'geral',dPer:'mes',dRef:today().slice(0,7),aTab:'oficina',step:0,cfg:null,recFilter:'pendentes'};
 
 /* ---------- catálogo padrão de materiais ---------- */
@@ -1160,6 +1161,7 @@ function restoreUI(){try{var u=JSON.parse(sessionStorage.getItem('bancada-ui'));
 function persistState(){
   if(readOnly)return false;
   S.updatedAt=Math.max(Date.now(),n(S.updatedAt)+1);
+  if(cloudEnabled)return !!cloud&&cloud.enqueue(S);
   var local=true;
   try{localStorage.setItem('bancada-state',JSON.stringify(S))}catch(e){local=false}
   if(cap){clearTimeout(pubTimer);pubTimer=setTimeout(publishNow,1100);syncState('saving')}
@@ -1168,8 +1170,8 @@ function persistState(){
 function save(msg){
   var saved=persistState();
   render();
-  if(!saved)toast(readOnly?'Você tem acesso só de leitura.':'Não foi possível gravar neste navegador. Exporte um backup em Ajustes.');
-  else if(msg)toast(msg);
+  if(!saved)toast(readOnly?'Você tem acesso só de leitura.':'Não foi possível gravar. Exporte um backup em Ajustes.');
+  else if(msg)toast(cloudEnabled?'Aguardando sincronização.':msg);
 }
 function publishNow(){
   if(!cap||readOnly)return;
@@ -1188,6 +1190,51 @@ function syncState(m){syncMode=m;var el=$('#sync');if(el)el.innerHTML=syncHTML()
 function syncHTML(){
   var map={local:['warn','Salvo só neste navegador'],ok:['ok','Salvo na nuvem'],saving:['warn','Salvando…'],err:['warn','Falha ao salvar na nuvem'],ro:['','Somente leitura']};
   var m=map[syncMode]||map.local;return '<span class="dot '+m[0]+'"></span><span>'+m[1]+'</span>';
+}
+function cloudCanReload(){
+  return !!S&&!ui.draft&&!$('#modal-root').innerHTML&&(!ui.cfg||JSON.stringify(ui.cfg)===JSON.stringify(S.config));
+}
+function cloudStatus(mode){
+  readOnly=mode==='conflict';
+  syncState(mode);
+  var panel=$('#cloud-panel');
+  if(!panel)return;
+  var message={ok:'Dados sincronizados',saving:'Salvando na nuvem…',err:'Falha na sincronização.',conflict:'Outra pessoa salvou uma versão mais recente.'}[mode];
+  var draftStatus=$('#draft-status');
+  if(draftStatus)draftStatus.textContent=mode==='ok'?'Rascunho salvo':message;
+  panel.innerHTML='<span class="muted small">'+(cloudProfile==='master'?'Studio · Master':'Operação')+'</span><span role="status">'+esc(message||'Conectando…')+'</span>'+
+    (mode==='conflict'?'<button class="btn btn-sm" data-act="exportBackup">Exportar alterações</button><button class="btn btn-sm" data-act="cloudDiscard">Carregar versão da nuvem</button>':
+      '<button class="btn btn-sm" data-act="cloudRefresh">'+(mode==='err'?'Tentar novamente':'Atualizar dados')+'</button>')+
+    '<button class="btn btn-sm btn-ghost" data-act="cloudSignOut">Sair</button>';
+}
+function loadCloudState(state,profile){
+  if(profile)cloudProfile=profile;
+  var next=state===null?seed():readBackup(JSON.stringify({format:'bancada-backup',version:1,state:state}));
+  var previous=S;S=next;
+  try{migrate();mergeDupes();cxMigrate()}catch(e){S=previous;throw e}
+  ui.cfg=null;ui.draft=null;ui.quoteId=null;ui.backup=null;ui.cxOpen={};
+  readOnly=false;
+  closeModal();
+  render();cfgLive();
+}
+function bootCloud(){
+  if(typeof window.createBancadaCloud!=='function'){
+    $('#app').innerHTML='<p class="empty" role="alert">Não foi possível carregar a conexão do Bancada. Recarregue a página.</p>';
+    return;
+  }
+  cloud=window.createBancadaCloud({
+    root:function(){return $('#app')},
+    lock:function(){
+      S=null;cloudProfile='';readOnly=true;ui.cfg=null;ui.draft=null;ui.quoteId=null;ui.backup=null;ui.mobcloud=null;ui.apProposal=null;
+      closeModal();
+      $('#toast-root').innerHTML='';
+    },
+    load:loadCloudState,
+    status:cloudStatus,
+    canReload:cloudCanReload,
+    notify:toast
+  });
+  cloud.start();
 }
 function initCap(){
   try{
@@ -1507,6 +1554,7 @@ function selectF(label,id,val,opts){return '<div class="field"><label for="'+id+
 function val(id){var e=document.getElementById(id);return e?e.value:''}
 
 function render(){
+  if(cloudEnabled&&!S)return;
   var app=$('#app');
   var h=location.hash.replace('#','');
   var views=NAV.map(function(x){return x[0]});
@@ -1522,6 +1570,10 @@ function render(){
   var main=$('#main');
   var fn={inicio:vInicio,orcamentos:vOrcamentos,clientes:vClientes,obras:vObras,dinheiro:vDinheiro,ajustes:vAjustes}[ui.view];
   main.innerHTML=fn();
+  if(cloudEnabled){
+    main.insertAdjacentHTML('afterbegin','<div id="cloud-panel" class="actions" style="justify-content:flex-end;flex-wrap:wrap;margin-bottom:16px"></div>');
+    cloudStatus(syncMode);
+  }
 }
 
 /* ---------- Início ---------- */
@@ -2527,7 +2579,7 @@ function autoSaveDraft(){
   if(readOnly||!ui.draft||ui.draft.status!=='rascunho')return;
   commitDraft();ui.quoteId=ui.draft.id;
   var ok=persistState(),status=$('#draft-status');
-  if(status)status.textContent=ok?'Rascunho salvo':'Falha ao gravar rascunho';
+  if(status)status.textContent=ok?(cloudEnabled?'Salvando na nuvem…':'Rascunho salvo'):'Falha ao gravar rascunho';
 }
 function copyQuote(id,revision){
   var source=quote(id);
@@ -3210,6 +3262,17 @@ function aMargens(){
 
 /* ---------- ações ---------- */
 var A={
+  cloudRefresh:async function(){
+    if(!cloudCanReload()){toast('Feche o orçamento ou salve os ajustes antes de atualizar.');return}
+    await cloud.flush();
+    if(!cloud.hasPending())await cloud.refresh();
+  },
+  cloudSignOut:function(){cloud.signOut()},
+  cloudDiscard:function(){
+    openModal({title:'Carregar a versão da nuvem?',body:'<p>Exporte suas alterações pendentes antes de carregar a versão salva por outra pessoa.</p>',
+      foot:'<button class="btn" data-act="exportBackup">Exportar alterações</button><button class="btn" data-act="closeModal">Voltar</button><button class="btn btn-primary" data-act="cloudConfirmDiscard">Carregar versão da nuvem</button>'});
+  },
+  cloudConfirmDiscard:function(){closeModal();cloud.refresh({discard:true})},
   bgClose:function(b,e){if(e.target===b)closeModal()},
   closeModal:closeModal,
   mobcloudImport:function(){
@@ -3438,6 +3501,10 @@ function showText(txt){openModal({title:'Proposta para copiar',body:'<p class="m
 
 document.addEventListener('click',function(e){
   var b=e.target.closest('[data-act]');if(!b)return;
+  if(cloudEnabled&&!S)return;
+  if(cloudEnabled&&readOnly&&!['exportBackup','cloudDiscard','cloudConfirmDiscard','closeModal','bgClose','toggleSide'].includes(b.dataset.act)){
+    toast('Exporte as alterações pendentes e carregue a versão mais recente da nuvem.');return;
+  }
   var a=A[b.dataset.act];if(!a)return;
   if(b.tagName==='BUTTON'||b.getAttribute('role')==='button')e.preventDefault();
   a(b,e);
@@ -3447,6 +3514,7 @@ document.addEventListener('keydown',function(e){
   if((e.key==='Enter'||e.key===' ')&&e.target.matches('[role="button"][data-act]')){e.preventDefault();e.target.click()}
 });
 document.addEventListener('input',function(e){
+  if(cloudEnabled&&(!S||readOnly))return;
   var t=e.target;
   if(t.id&&t.id.startsWith('cx-rate-')){readCxRates();return}
   if(t.id==='material-search'){$('#material-results').innerHTML=materialResults(t.value);return}
@@ -3470,6 +3538,7 @@ document.addEventListener('input',function(e){
   }
 });
 document.addEventListener('change',function(e){
+  if(cloudEnabled&&(!S||readOnly))return;
   var t=e.target;
   if(t.id==='mobcloud-file'){openMobcloudFile(t);return}
   var mobItem=(t.id||'').match(/^mob-itens-(\d+)$/);
@@ -3488,7 +3557,8 @@ document.addEventListener('change',function(e){
 document.addEventListener('mousemove',chartHover);
 window.addEventListener('hashchange',function(){if(location.hash!=='#orcamentos'){ui.quoteId=null;ui.draft=null}if(location.hash!=='#ajustes')ui.cfg=null;closeModal();render();cfgLive();window.scrollTo(0,0)});
 
-loadState();restoreUI();render();if(ui.quoteId&&ui.draft)live();cfgLive();initCap();
+if(cloudEnabled)bootCloud();
+else{loadState();restoreUI();render();if(ui.quoteId&&ui.draft)live();cfgLive();initCap()}
 window.__bancada={calcQuote:calcQuote,calcCond:calcCond,oficina:oficina,getS:function(){return S}};
 })();
 </script></body>

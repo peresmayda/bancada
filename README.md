@@ -2,6 +2,21 @@
 
 Sistema de gestão para marcenaria. Abra `index.html` no navegador para usar a versão local desta pasta.
 
+## Vercel e Supabase
+
+A publicação na Vercel executa `npm run build` e usa a pasta `dist`.
+Configure `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` nas variáveis do projeto.
+A chave aceita tem prefixo `sb_publishable_`. A compilação interrompe a publicação quando a configuração está incompleta.
+
+O arquivo `supabase/bancada.sql` prepara uma base compartilhada da oficina e as permissões de leitura e gravação.
+Um administrador deve criar os usuários no Supabase Auth e aprovar os e-mails em `bancada_convites`, com perfil `master` ou `operacao`.
+O primeiro login de uma conta com e-mail confirmado registra o acesso automaticamente.
+O aplicativo publicado pede e-mail e senha antes de carregar a base.
+Os dois perfis têm acesso de leitura e edição à mesma oficina. A conta do Studio administra os usuários e a lista de acesso pelo painel do Supabase.
+
+Se houver alterações simultâneas, a segunda gravação apresenta um conflito. Exporte as alterações pendentes antes de carregar a versão salva por outra pessoa.
+O painel superior mostra a situação da sincronização e permite atualizar os dados ou sair da conta.
+
 ## Publicar no GitHub Pages
 
 1. Crie um repositório chamado `bancada` na sua conta do GitHub. No plano gratuito, o GitHub Pages exige um repositório público.

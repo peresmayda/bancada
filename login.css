@@ -1,0 +1,68 @@
+.bancada-login {
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  padding: 32px clamp(20px, 5vw, 72px);
+}
+.bancada-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink);
+}
+.bancada-login-brand svg { flex: none; }
+.bancada-login-brand strong { display: block; font-size: 22px; letter-spacing: -.04em; }
+.bancada-login-brand span { display: block; color: var(--muted); font-size: 12px; }
+.bancada-login-center {
+  display: grid;
+  place-items: center;
+  padding: 56px 0 88px;
+}
+.bancada-login-card {
+  width: min(100%, 432px);
+  padding: clamp(24px, 5vw, 40px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+.bancada-login-card h1 { font-size: clamp(26px, 5vw, 30px); line-height: 1.2; }
+.bancada-login-intro { margin: 10px 0 30px; color: var(--muted); font-size: 14px; }
+.bancada-login-card .field { margin-bottom: 20px; }
+.bancada-login-card label { font-size: 13px; font-weight: 600; }
+.bancada-login-card .in {
+  min-height: 48px;
+  padding: 12px 14px;
+  font-size: 16px;
+  background: var(--surface);
+}
+.bancada-login-password { position: relative; }
+.bancada-login-password input { padding-right: 84px !important; }
+.bancada-login-toggle {
+  position: absolute;
+  right: 4px;
+  top: 2px;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.bancada-login-card :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.bancada-login-submit { width: 100%; min-height: 48px; justify-content: center; }
+.bancada-login-status { font-size: 13px; color: var(--muted); }
+.bancada-login-status:not(:empty) {
+  margin-bottom: 18px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.bancada-login-status[data-error="true"] { color: var(--bad); background: var(--bad-soft); }
+@media (max-width: 480px) {
+  .bancada-login { padding: 24px 20px; }
+  .bancada-login-center { padding: 40px 0; align-items: start; }
+  .bancada-login-card { padding: 28px 22px; }
+}
