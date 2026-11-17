@@ -2,6 +2,9 @@
 
 Sistema de gestão para marcenaria. Abra `index.html` no navegador para usar a versão local desta pasta.
 
+A versão com login fica em [bancada-theta-azure.vercel.app](https://bancada-theta-azure.vercel.app/).
+Ela usa o projeto Bancada na organização Studio Noar do Supabase, com banco na região de São Paulo.
+
 ## Vercel e Supabase
 
 A publicação na Vercel executa `npm run build` e usa a pasta `dist`.
