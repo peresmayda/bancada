@@ -15,6 +15,9 @@ O arquivo `supabase/bancada.sql` prepara uma base compartilhada da oficina e as 
 Um administrador deve criar os usuários no Supabase Auth e aprovar os e-mails em `bancada_convites`, com perfil `master` ou `operacao`.
 O primeiro login de uma conta com e-mail confirmado registra o acesso automaticamente.
 O aplicativo publicado pede e-mail e senha antes de carregar a base.
+Na entrada, **Criar conta** permite definir uma senha e confirmar o endereço por e-mail.
+O projeto precisa de SMTP configurado para enviar confirmações a pessoas fora da equipe do Supabase.
+O endereço de retorno da confirmação é o mesmo endereço publicado do Bancada.
 Os dois perfis têm acesso de leitura e edição à mesma oficina. A conta do Studio administra os usuários e a lista de acesso pelo painel do Supabase.
 
 Se houver alterações simultâneas, a segunda gravação apresenta um conflito. Exporte as alterações pendentes antes de carregar a versão salva por outra pessoa.

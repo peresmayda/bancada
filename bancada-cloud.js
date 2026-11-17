@@ -38,6 +38,8 @@
       if (!response.ok) {
         const error = new Error('Supabase: ' + response.status);
         error.status = response.status;
+        const detail = await response.json().catch(() => ({}));
+        error.code = detail.code || detail.error_code || '';
         throw error;
       }
       if (response.status === 204 || !response.headers.get('content-type')?.includes('application/json')) {
@@ -79,21 +81,28 @@
       return rows[0];
     }
 
-    function showLogin(message = '') {
+    function showLogin(message = '', options = {}) {
+      const creating = options.create === true;
       ui.lock();
       ui.root().innerHTML = '<div class="bancada-login"><header class="bancada-login-brand">' +
         '<svg width="36" height="36" viewBox="0 0 30 30" aria-hidden="true"><rect x="1" y="1" width="28" height="28" rx="8" fill="currentColor"/><path d="M7 11.5h16M7 16h16M7 20.5h10" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="21" cy="20.5" r="1.6" fill="var(--brown)"/></svg>' +
         '<div><strong>Bancada</strong><span>gestão de marcenaria</span></div></header><main class="bancada-login-center">' +
-        '<form class="bancada-login-card" id="bancada-cloud-login"><h1>Entrar no Bancada</h1>' +
-        '<p class="bancada-login-intro">Acesse a sua marcenaria.</p>' +
+        '<form class="bancada-login-card" id="bancada-cloud-login"><h1>'+(creating?'Criar conta':'Entrar no Bancada')+'</h1>' +
+        '<p class="bancada-login-intro">'+(creating?'Cadastre seu e-mail e defina sua senha.':'Acesse a sua marcenaria.')+'</p>' +
         '<div class="field"><label for="cloud-email">E-mail</label><input class="in" type="email" id="cloud-email" name="email" autocomplete="username" required></div>' +
-        '<div class="field"><label for="cloud-password">Senha</label><div class="bancada-login-password"><input class="in" type="password" id="cloud-password" name="password" autocomplete="current-password" required>' +
+        '<div class="field"><label for="cloud-password">Senha</label><div class="bancada-login-password"><input class="in" type="password" id="cloud-password" name="password" autocomplete="'+(creating?'new-password':'current-password')+'"'+(creating?' minlength="8" maxlength="128"':'')+' required>' +
         '<button class="bancada-login-toggle" type="button" aria-controls="cloud-password" aria-label="Mostrar senha">Mostrar</button></div></div>' +
-        '<p class="bancada-login-status" role="status" aria-live="polite" id="cloud-message"></p><button class="btn btn-primary bancada-login-submit" type="submit">Entrar</button></form></main></div>';
+        (creating?'<div class="field"><label for="cloud-confirm">Confirmar senha</label><input class="in" type="password" id="cloud-confirm" name="confirm" autocomplete="new-password" minlength="8" maxlength="128" required></div><p class="bancada-login-note">Você receberá um e-mail de confirmação. O acesso à oficina precisa estar liberado pelo master.</p>':'')+
+        '<p class="bancada-login-status" role="status" aria-live="polite" id="cloud-message"></p><button class="btn btn-primary bancada-login-submit" type="submit">'+(creating?'Criar conta':'Entrar')+'</button>'+
+        '<p class="bancada-login-footer">'+(creating?'Já tem conta? ':'Ainda não tem conta? ')+'<button type="button" class="bancada-login-switch">'+(creating?'Entrar':'Criar conta')+'</button></p></form></main></div>';
       const form = ui.root().querySelector('form');
       const feedback = form.querySelector('[role=status]');
       const button = form.querySelector('[type=submit]');
       const toggle = form.querySelector('.bancada-login-toggle');
+      form.elements.email.value = options.email || '';
+      form.querySelector('.bancada-login-switch').addEventListener('click', () => {
+        if (!busy) showLogin('', { create: !creating, email: form.elements.email.value });
+      });
       toggle.addEventListener('click', () => {
         const password = form.elements.password;
         const showing = password.type === 'password';
@@ -105,12 +114,29 @@
       form.addEventListener('submit', async event => {
         event.preventDefault();
         if (busy) return;
+        if (creating && form.elements.password.value !== form.elements.confirm.value) {
+          feedback.dataset.error = 'true';
+          feedback.textContent = 'As senhas precisam ser iguais.';
+          form.elements.confirm.focus();
+          return;
+        }
         busy = true;
         button.disabled = true;
         feedback.dataset.error = 'false';
         form.setAttribute('aria-busy', 'true');
-        feedback.textContent = 'Verificando o acesso…';
+        feedback.textContent = creating ? 'Criando sua conta…' : 'Verificando o acesso…';
         try {
+          if (creating) {
+            await request('/auth/v1/signup?redirect_to=' + encodeURIComponent(location.origin + '/'), {
+              method: 'POST',
+              body: { email: form.elements.email.value.trim(), password: form.elements.password.value }
+            });
+            const email = form.elements.email.value;
+            form.elements.password.value = '';
+            form.elements.confirm.value = '';
+            showLogin('Confira sua caixa de entrada e o spam para confirmar o cadastro. Se já tem conta, entre com sua senha.', { email });
+            return;
+          }
           storeSession(await tokenGrant('password', {
             email: form.elements.email.value.trim(),
             password: form.elements.password.value
@@ -118,9 +144,10 @@
           form.elements.password.value = '';
           await openSession();
         } catch (error) {
-          storeSession(null);
+          if (!creating) storeSession(null);
           feedback.dataset.error = 'true';
-          feedback.textContent = error.status === 400 || error.status === 401
+          feedback.textContent = creating ? signupError(error) : error.code === 'email_not_confirmed'
+            ? 'Confirme seu e-mail pelo link recebido antes de entrar.' : error.status === 400 || error.status === 401
             ? 'Confira o e-mail e a senha.' : error.status === 403
               ? 'Esta conta ainda não tem acesso à oficina.' : 'O Bancada não conseguiu conectar. Tente novamente.';
         } finally {
@@ -129,6 +156,18 @@
           form.removeAttribute('aria-busy');
         }
       });
+    }
+
+    function signupError(error) {
+      if (error.status === 429 || error.code === 'over_email_send_rate_limit') {
+        return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
+      }
+      if (error.code === 'email_address_not_authorized' || error.code === 'unexpected_failure' || error.status >= 500) {
+        return 'O envio da confirmação por e-mail está indisponível. Avise o master para conferir o serviço de e-mail.';
+      }
+      if (error.code === 'weak_password') return 'Escolha uma senha mais forte, com pelo menos 8 caracteres.';
+      if (error.code === 'signup_disabled') return 'O cadastro está desativado. Peça ao master para liberar.';
+      return 'Não foi possível criar a conta. Confira o e-mail e a senha e tente novamente.';
     }
 
     async function openSession() {
@@ -149,6 +188,26 @@
 
     async function start() {
       ui.root().innerHTML = '<p class="empty" role="status">Carregando o Bancada…</p>';
+      const callback = new URLSearchParams(location.hash.replace(/^#/, ''));
+      if (callback.has('access_token') || callback.has('error')) {
+        history.replaceState(null, '', location.pathname + location.search + '#inicio');
+        if (callback.has('error')) return showLogin('O link de confirmação expirou ou já foi usado. Tente entrar com sua senha.');
+        try {
+          const access = callback.get('access_token'), refresh = callback.get('refresh_token');
+          if (!access || !refresh || callback.get('type') !== 'signup') throw new Error('Confirmação inválida');
+          const user = await request('/auth/v1/user', { token: access });
+          if (!user?.id || !user.email_confirmed_at) throw new Error('E-mail não confirmado');
+          storeSession({
+            access, refresh, userId: user.id,
+            expires: Date.now() + Math.min(3600, Math.max(0, Number(callback.get('expires_in')) || 3600)) * 1000
+          });
+          await openSession();
+        } catch (error) {
+          storeSession(null);
+          showLogin(error.status === 403 ? 'E-mail confirmado. Peça ao master para liberar seu acesso à oficina.' : 'Tente entrar com seu e-mail e senha para continuar.');
+        }
+        return;
+      }
       try {
         const value = JSON.parse(sessionStorage.getItem(sessionKey) || 'null');
         if (value?.refresh && value?.access && value?.userId) session = value;

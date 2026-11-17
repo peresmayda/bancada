@@ -63,6 +63,18 @@
   background: var(--surface-2);
 }
 .bancada-login-status[data-error="true"] { color: var(--bad); background: var(--bad-soft); }
+.bancada-login-note { margin: 0 0 20px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.bancada-login-footer { margin-top: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+.bancada-login-switch {
+  min-height: 44px;
+  padding: 6px 4px;
+  color: var(--blue);
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
 @media (max-width: 480px) {
   .bancada-login { padding: 24px 20px; }
   .bancada-login-center { padding: 40px 0; align-items: start; }
