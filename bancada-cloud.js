@@ -16,10 +16,11 @@
     function storeSession(value) {
       session = value;
       try {
-        if (value) sessionStorage.setItem(sessionKey, JSON.stringify(value));
-        else sessionStorage.removeItem(sessionKey);
+        if (value) localStorage.setItem(sessionKey, JSON.stringify(value));
+        else localStorage.removeItem(sessionKey);
+        sessionStorage.removeItem(sessionKey);
       } catch {
-        // The current sign-in still works when session storage is unavailable.
+        // The current sign-in still works when browser storage is unavailable.
       }
     }
 
@@ -48,15 +49,19 @@
       return response.json();
     }
 
-    async function tokenGrant(grant, body) {
-      const data = await request('/auth/v1/token?grant_type=' + grant, { method: 'POST', body });
+    function sessionFrom(data) {
       if (!data?.access_token || !data.refresh_token || !data.user?.id) throw new Error('Sessão inválida');
       return {
         access: data.access_token,
         refresh: data.refresh_token,
-        expires: Date.now() + Number(data.expires_in) * 1000,
-        userId: data.user.id
+        expires: Date.now() + Number(data.expires_in || 3600) * 1000,
+        userId: data.user.id,
+        email: data.user.email || ''
       };
+    }
+
+    async function tokenGrant(grant, body) {
+      return sessionFrom(await request('/auth/v1/token?grant_type=' + grant, { method: 'POST', body }));
     }
 
     async function accessToken() {
@@ -65,6 +70,7 @@
       if (!refreshing) {
         refreshing = tokenGrant('refresh_token', { refresh_token: session.refresh }).then(next => {
           if (next.userId !== session.userId) throw new Error('Sessão inválida');
+          if (!next.email) next.email = session.email || '';
           storeSession(next);
           return next.access;
         }).finally(() => { refreshing = null; });
@@ -72,8 +78,12 @@
       return refreshing;
     }
 
+    function own() {
+      return 'usuario=eq.' + encodeURIComponent(session.userId);
+    }
+
     async function read() {
-      const rows = await request('/rest/v1/bancada_estado?select=revisao,dados&id=eq.1', {
+      const rows = await request('/rest/v1/bancada_estado?select=revisao,dados&' + own(), {
         token: await accessToken()
       });
       if (!Array.isArray(rows) || rows.length !== 1) return null;
@@ -92,7 +102,7 @@
         '<div class="field"><label for="cloud-email">E-mail</label><input class="in" type="email" id="cloud-email" name="email" autocomplete="username" required></div>' +
         '<div class="field"><label for="cloud-password">Senha</label><div class="bancada-login-password"><input class="in" type="password" id="cloud-password" name="password" autocomplete="'+(creating?'new-password':'current-password')+'"'+(creating?' minlength="8" maxlength="128"':'')+' required>' +
         '<button class="bancada-login-toggle" type="button" aria-controls="cloud-password" aria-label="Mostrar senha">Mostrar</button></div></div>' +
-        (creating?'<div class="field"><label for="cloud-confirm">Confirmar senha</label><input class="in" type="password" id="cloud-confirm" name="confirm" autocomplete="new-password" minlength="8" maxlength="128" required></div><p class="bancada-login-note">Você receberá um e-mail de confirmação. O acesso à oficina precisa estar liberado pelo master.</p>':'')+
+        (creating?'<div class="field"><label for="cloud-confirm">Confirmar senha</label><input class="in" type="password" id="cloud-confirm" name="confirm" autocomplete="new-password" minlength="8" maxlength="128" required></div><p class="bancada-login-note">A conta começa com uma oficina vazia, só sua, com o catálogo de materiais pronto.</p>':'')+
         '<p class="bancada-login-status" role="status" aria-live="polite" id="cloud-message"></p><button class="btn btn-primary bancada-login-submit" type="submit">'+(creating?'Criar conta':'Entrar')+'</button>'+
         '<p class="bancada-login-footer">'+(creating?'Já tem conta? ':'Ainda não tem conta? ')+'<button type="button" class="bancada-login-switch">'+(creating?'Entrar':'Criar conta')+'</button></p></form></main></div>';
       const form = ui.root().querySelector('form');
@@ -127,10 +137,17 @@
         feedback.textContent = creating ? 'Criando sua conta…' : 'Verificando o acesso…';
         try {
           if (creating) {
-            await request('/auth/v1/signup?redirect_to=' + encodeURIComponent(location.origin + '/'), {
+            const created = await request('/auth/v1/signup?redirect_to=' + encodeURIComponent(location.origin + '/'), {
               method: 'POST',
               body: { email: form.elements.email.value.trim(), password: form.elements.password.value }
             });
+            if (created?.access_token) {
+              storeSession(sessionFrom(created));
+              form.elements.password.value = '';
+              form.elements.confirm.value = '';
+              await openSession();
+              return;
+            }
             const email = form.elements.email.value;
             form.elements.password.value = '';
             form.elements.confirm.value = '';
@@ -148,8 +165,7 @@
           feedback.dataset.error = 'true';
           feedback.textContent = creating ? signupError(error) : error.code === 'email_not_confirmed'
             ? 'Confirme seu e-mail pelo link recebido antes de entrar.' : error.status === 400 || error.status === 401
-            ? 'Confira o e-mail e a senha.' : error.status === 403
-              ? 'Esta conta ainda não tem acesso à oficina.' : 'O Bancada não conseguiu conectar. Tente novamente.';
+            ? 'Confira o e-mail e a senha.' : 'O Bancada não conseguiu conectar. Tente novamente.';
         } finally {
           busy = false;
           button.disabled = false;
@@ -163,25 +179,28 @@
         return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
       }
       if (error.code === 'email_address_not_authorized' || error.code === 'unexpected_failure' || error.status >= 500) {
-        return 'O envio da confirmação por e-mail está indisponível. Avise o master para conferir o serviço de e-mail.';
+        return 'O cadastro está indisponível agora. Tente de novo mais tarde.';
       }
       if (error.code === 'weak_password') return 'Escolha uma senha mais forte, com pelo menos 8 caracteres.';
-      if (error.code === 'signup_disabled') return 'O cadastro está desativado. Peça ao master para liberar.';
+      if (error.code === 'user_already_exists' || error.code === 'email_exists') return 'Este e-mail já tem conta. Entre com sua senha.';
+      if (error.code === 'signup_disabled') return 'O cadastro de contas novas está desligado.';
       return 'Não foi possível criar a conta. Confira o e-mail e a senha e tente novamente.';
     }
 
+    // A primeira entrada cria a base vazia da conta; as seguintes só leem.
     async function openSession() {
-      const profile = await request('/rest/v1/rpc/bancada_entrar', {
-        token: await accessToken(), method: 'POST', body: {}
-      });
-      if (!['master', 'operacao'].includes(profile)) throw new Error('Acesso inválido');
-      const row = await read();
+      let row = await read();
       if (!row) {
-        storeSession(null);
-        showLogin('Esta conta ainda não tem acesso à oficina.');
-        return;
+        await request('/rest/v1/bancada_estado?on_conflict=usuario', {
+          method: 'POST',
+          token: await accessToken(),
+          headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' },
+          body: { usuario: session.userId }
+        });
+        row = await read();
       }
-      ui.load(row.dados, profile);
+      if (!row) throw new Error('Base não encontrada');
+      ui.load(row.dados, session.email || 'Sua conta');
       revision = row.revisao;
       ui.status('ok');
     }
@@ -204,12 +223,12 @@
           await openSession();
         } catch (error) {
           storeSession(null);
-          showLogin(error.status === 403 ? 'E-mail confirmado. Peça ao master para liberar seu acesso à oficina.' : 'Tente entrar com seu e-mail e senha para continuar.');
+          showLogin('Tente entrar com seu e-mail e senha para continuar.');
         }
         return;
       }
       try {
-        const value = JSON.parse(sessionStorage.getItem(sessionKey) || 'null');
+        const value = JSON.parse(localStorage.getItem(sessionKey) || sessionStorage.getItem(sessionKey) || 'null');
         if (value?.refresh && value?.access && value?.userId) session = value;
       } catch {
         session = null;
@@ -233,7 +252,7 @@
     }
 
     async function send(snapshot) {
-      return request('/rest/v1/bancada_estado?select=revisao&id=eq.1&revisao=eq.' + revision, {
+      return request('/rest/v1/bancada_estado?select=revisao&' + own() + '&revisao=eq.' + revision, {
         method: 'PATCH',
         token: await accessToken(),
         headers: { Prefer: 'return=representation' },
@@ -279,7 +298,7 @@
           else {
             revision = null;
             storeSession(null);
-            showLogin('Esta conta não tem acesso à oficina.');
+            showLogin('Entre novamente para continuar.');
           }
           return;
         }

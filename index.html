@@ -1199,10 +1199,10 @@ function cloudStatus(mode){
   syncState(mode);
   var panel=$('#cloud-panel');
   if(!panel)return;
-  var message={ok:'Dados sincronizados',saving:'Salvando na nuvem…',err:'Falha na sincronização.',conflict:'Outra pessoa salvou uma versão mais recente.'}[mode];
+  var message={ok:'Dados sincronizados',saving:'Salvando na nuvem…',err:'Falha na sincronização.',conflict:'Esta conta salvou uma versão mais recente em outra aba ou aparelho.'}[mode];
   var draftStatus=$('#draft-status');
   if(draftStatus)draftStatus.textContent=mode==='ok'?'Rascunho salvo':message;
-  panel.innerHTML='<span class="muted small">'+(cloudProfile==='master'?'Studio · Master':'Operação')+'</span><span role="status">'+esc(message||'Conectando…')+'</span>'+
+  panel.innerHTML='<span class="muted small">'+esc(cloudProfile||'Sua conta')+'</span><span role="status">'+esc(message||'Conectando…')+'</span>'+
     (mode==='conflict'?'<button class="btn btn-sm" data-act="exportBackup">Exportar alterações</button><button class="btn btn-sm" data-act="cloudDiscard">Carregar versão da nuvem</button>':
       '<button class="btn btn-sm" data-act="cloudRefresh">'+(mode==='err'?'Tentar novamente':'Atualizar dados')+'</button>')+
     '<button class="btn btn-sm btn-ghost" data-act="cloudSignOut">Sair</button>';
