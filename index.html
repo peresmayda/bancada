@@ -1224,7 +1224,7 @@ function cloudStatus(mode){
   var message={ok:'Dados sincronizados',saving:'Salvando na nuvem…',err:'Falha na sincronização.',conflict:'Esta conta salvou uma versão mais recente em outra aba ou aparelho.'}[mode];
   var draftStatus=$('#draft-status');
   if(draftStatus)draftStatus.textContent=mode==='ok'?'Rascunho salvo':message;
-  panel.innerHTML=mode==='err'?'<div class="alert warn cloud-alert" role="alert"><span>Não foi possível salvar na nuvem. As alterações ficam guardadas aqui até a conexão voltar.</span><button class="btn btn-sm" data-act="cloudRefresh">Tentar novamente</button></div>':
+  panel.innerHTML=mode==='err'?'<div class="alert warn cloud-alert" role="alert"><span>Sem conexão com a nuvem. As alterações ficam guardadas neste aparelho e são enviadas sozinhas quando a conexão voltar.</span><button class="btn btn-sm" data-act="cloudRefresh">Tentar agora</button></div>':
     mode==='conflict'?'<div class="alert warn cloud-alert" role="alert"><span>Esta conta salvou uma versão mais recente em outra aba ou aparelho.</span><span class="actions"><button class="btn btn-sm" data-act="exportBackup">Exportar alterações</button><button class="btn btn-sm" data-act="cloudDiscard">Carregar versão da nuvem</button></span></div>':'';
 }
 function loadCloudState(state,profile){
@@ -3290,10 +3290,10 @@ var A={
   },
   cloudSignOut:function(){cloud.signOut()},
   cloudDiscard:function(){
-    openModal({title:'Carregar a versão da nuvem?',body:'<p>Exporte suas alterações pendentes antes de carregar a versão salva por outra pessoa.</p>',
-      foot:'<button class="btn" data-act="exportBackup">Exportar alterações</button><button class="btn" data-act="closeModal">Voltar</button><button class="btn btn-primary" data-act="cloudConfirmDiscard">Carregar versão da nuvem</button>'});
+    openModal({title:'Carregar a versão da nuvem?',body:'<p>As alterações feitas neste aparelho serão trocadas pela versão salva na nuvem. Antes da troca, um backup com elas será baixado, para nada se perder.</p>',
+      foot:'<button class="btn" data-act="closeModal">Voltar</button><button class="btn btn-primary" data-act="cloudConfirmDiscard">Baixar backup e carregar</button>'});
   },
-  cloudConfirmDiscard:function(){closeModal();cloud.refresh({discard:true})},
+  cloudConfirmDiscard:function(){exportBackup();closeModal();cloud.refresh({discard:true})},
   bgClose:function(b,e){if(e.target===b)closeModal()},
   closeModal:closeModal,
   mobcloudImport:function(){

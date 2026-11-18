@@ -80,3 +80,15 @@
   .bancada-login-center { padding: 40px 0; align-items: start; }
   .bancada-login-card { padding: 28px 22px; }
 }
+.bancada-login-forgot {
+  display: block;
+  margin: -8px 0 20px auto;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.bancada-login-forgot:hover { text-decoration: underline; }

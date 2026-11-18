@@ -12,6 +12,7 @@
     let timer = null;
     let conflict = false;
     let busy = false;
+    let retryTimer = null;
 
     function storeSession(value) {
       session = value;
@@ -22,6 +23,38 @@
       } catch {
         // The current sign-in still works when browser storage is unavailable.
       }
+    }
+
+    // O que ainda não chegou à nuvem fica guardado neste aparelho, por conta.
+    // Assim, fechar a página sem internet não perde as alterações.
+    function pendingKey() {
+      return 'bancada-pendente:' + config.url + ':' + (session ? session.userId : '');
+    }
+
+    function keepPending() {
+      if (!session || pending === null) return;
+      try {
+        localStorage.setItem(pendingKey(), JSON.stringify({ base: revision, data: pending, at: Date.now() }));
+      } catch {
+        // Sem espaço no aparelho: a página ainda avisa antes de fechar.
+      }
+    }
+
+    function dropPending() {
+      try { if (session) localStorage.removeItem(pendingKey()); } catch { /* nada a limpar */ }
+    }
+
+    function storedPending() {
+      try {
+        const value = JSON.parse(localStorage.getItem(pendingKey()) || 'null');
+        if (value && typeof value.data === 'string' && Number.isSafeInteger(value.base)) return value;
+      } catch { /* cópia ilegível é ignorada */ }
+      return null;
+    }
+
+    function scheduleRetry() {
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => { if (pending && !conflict) flush(); }, 30000);
     }
 
     async function request(path, { token, body, method = 'GET', headers = {} } = {}) {
@@ -103,6 +136,7 @@
         '<div class="field"><label for="cloud-password">Senha</label><div class="bancada-login-password"><input class="in" type="password" id="cloud-password" name="password" autocomplete="'+(creating?'new-password':'current-password')+'"'+(creating?' minlength="8" maxlength="128"':'')+' required>' +
         '<button class="bancada-login-toggle" type="button" aria-controls="cloud-password" aria-label="Mostrar senha">Mostrar</button></div></div>' +
         (creating?'<div class="field"><label for="cloud-confirm">Confirmar senha</label><input class="in" type="password" id="cloud-confirm" name="confirm" autocomplete="new-password" minlength="8" maxlength="128" required></div><p class="bancada-login-note">A conta começa com uma oficina vazia, só sua, com o catálogo de materiais pronto.</p>':'')+
+        (creating?'':'<button type="button" class="bancada-login-forgot">Esqueci minha senha</button>') +
         '<p class="bancada-login-status" role="status" aria-live="polite" id="cloud-message"></p><button class="btn btn-primary bancada-login-submit" type="submit">'+(creating?'Criar conta':'Entrar')+'</button>'+
         '<p class="bancada-login-footer">'+(creating?'Já tem conta? ':'Ainda não tem conta? ')+'<button type="button" class="bancada-login-switch">'+(creating?'Entrar':'Criar conta')+'</button></p></form></main></div>';
       const form = ui.root().querySelector('form');
@@ -112,6 +146,11 @@
       form.elements.email.value = options.email || '';
       form.querySelector('.bancada-login-switch').addEventListener('click', () => {
         if (!busy) showLogin('', { create: !creating, email: form.elements.email.value });
+      });
+      const forgot = form.querySelector('.bancada-login-forgot');
+      if (forgot) forgot.addEventListener('click', () => {
+        feedback.dataset.error = 'false';
+        feedback.textContent = 'Peça a quem administra o Bancada para criar uma senha nova para o seu e-mail. Os dados da sua oficina continuam guardados.';
       });
       toggle.addEventListener('click', () => {
         const password = form.elements.password;
@@ -200,6 +239,20 @@
         row = await read();
       }
       if (!row) throw new Error('Base não encontrada');
+      const local = storedPending();
+      if (local) {
+        ui.load(JSON.parse(local.data), session.email || 'Sua conta');
+        revision = row.revisao;
+        pending = local.data;
+        if (local.base === row.revisao) {
+          ui.status('saving');
+          flush();
+        } else {
+          conflict = true;
+          ui.status('conflict');
+        }
+        return;
+      }
       ui.load(row.dados, session.email || 'Sua conta');
       revision = row.revisao;
       ui.status('ok');
@@ -237,14 +290,30 @@
       try {
         await openSession();
       } catch (error) {
-        storeSession(null);
-        showLogin(error.status === 401 ? 'Entre novamente para continuar.' : 'Não foi possível carregar a oficina. Tente novamente.');
+        // Sessão vencida ou recusada: pede o login de novo.
+        if ([400, 401, 403].includes(error.status) || error.message === 'Sessão inválida') {
+          storeSession(null);
+          showLogin('Entre novamente para continuar.');
+          return;
+        }
+        // Sem conexão: a conta continua neste aparelho, com o que ficou guardado nele.
+        showOffline();
       }
+    }
+
+    function showOffline() {
+      ui.lock();
+      ui.root().innerHTML = '<div class="bancada-login"><header class="bancada-login-brand"><div><strong>Bancada</strong><span>gestão de marcenaria</span></div></header>' +
+        '<main class="bancada-login-center"><div class="bancada-login-card"><h1>Sem conexão</h1>' +
+        '<p class="bancada-login-intro">Não foi possível abrir a oficina agora. A conta continua conectada neste aparelho e as alterações guardadas nele não se perdem.</p>' +
+        '<button class="btn btn-primary bancada-login-submit" type="button">Tentar de novo</button></div></main></div>';
+      ui.root().querySelector('.bancada-login-submit').addEventListener('click', () => start());
     }
 
     function enqueue(state) {
       if (revision === null || conflict) return false;
       pending = JSON.stringify(state);
+      keepPending();
       ui.status('saving');
       clearTimeout(timer);
       timer = setTimeout(flush, 300);
@@ -271,12 +340,15 @@
             return;
           }
           revision = rows[0].revisao;
-          if (pending === snapshot) pending = null;
+          if (pending === snapshot) { pending = null; dropPending(); }
+          else keepPending();
         } catch {
           ui.status('err');
+          scheduleRetry();
           return;
         }
       }
+      clearTimeout(retryTimer);
       ui.status('ok');
     }
 
@@ -307,6 +379,7 @@
         revision = row.revisao;
         conflict = false;
         pending = null;
+        dropPending();
         ui.status('ok');
       } catch {
         ui.status(conflict ? 'conflict' : 'err');
@@ -340,7 +413,8 @@
       event.preventDefault();
       event.returnValue = '';
     });
-    window.addEventListener('focus', () => refresh());
+    window.addEventListener('focus', () => { if (pending && !conflict) flush(); else refresh(); });
+    window.addEventListener('online', () => { if (pending && !conflict) flush(); });
     return { start, enqueue, flush, refresh, signOut, hasPending: () => pending !== null };
   };
 })();

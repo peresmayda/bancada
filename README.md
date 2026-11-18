@@ -15,10 +15,31 @@ Ela usa o projeto Bancada na organização Studio Noar do Supabase, com banco na
 
 ## Supabase
 
-1. No **SQL Editor**, rode o arquivo `supabase/bancada.sql` inteiro. Ele apaga a estrutura anterior (oficina compartilhada com convites) e cria a tabela `bancada_estado`, com uma linha por conta.
+1. No **SQL Editor**, rode o arquivo `supabase/bancada.sql` inteiro. Ele cria a tabela `bancada_estado`, com uma linha por conta, e as regras de acesso. Pode ser rodado de novo sem apagar nenhuma oficina. Nunca acrescente `drop table` nele.
 2. Em **Authentication → Sign In / Providers → Email**, mantenha o cadastro ligado e desligue **Confirm email** enquanto o sistema estiver em teste. Assim a conta funciona na hora, sem depender de envio de e-mail.
 3. Para voltar a pedir confirmação, ligue **Confirm email** e configure um SMTP próprio em **Authentication → Emails → SMTP Settings**. O envio padrão do Supabase só entrega para quem faz parte da equipe do projeto.
 4. No plano gratuito, um projeto sem uso por 7 dias é pausado. Os dados ficam guardados e o projeto volta ao reativar no painel.
+
+## Senha esquecida
+
+Sem SMTP configurado, o Supabase não envia e-mail de recuperação. A tela de entrada tem o link **Esqueci minha senha**, que orienta a pessoa a pedir uma senha nova a quem administra o Bancada.
+
+Para trocar a senha, rode no **SQL Editor**, com o e-mail da pessoa e a senha nova (pelo menos 8 caracteres):
+
+```sql
+update auth.users
+set encrypted_password = extensions.crypt('SENHA-NOVA', extensions.gen_salt('bf')),
+    updated_at = now()
+where email = 'pessoa@exemplo.com';
+```
+
+Passe a senha nova pessoalmente. Os dados da oficina não mudam.
+
+## Sem internet
+
+O que ainda não chegou à nuvem fica guardado no aparelho, por conta. Se a página for fechada sem internet, as alterações são enviadas na próxima vez que a conta abrir no mesmo aparelho. Enquanto a conexão não volta, o sistema tenta de novo a cada 30 segundos e quando a internet volta.
+
+Se a mesma conta tiver salvado outra versão em outro aparelho nesse meio tempo, aparece o aviso de conflito. **Carregar versão da nuvem** baixa antes um backup com as alterações deste aparelho.
 
 ## Vercel
 
