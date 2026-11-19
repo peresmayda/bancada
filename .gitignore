@@ -1,6 +1,16 @@
-.vercel/
+# Arquivos gerados e configuração local
 dist/
 node_modules/
+.vercel/
 .env
 .env.*
+!.env.example
+.claude/
+.DS_Store
+Thumbs.db
+*.log
+
+# Histórico de recuperação local e dados privados da oficina
+arquivo/
 bancada-backup-*.json
+backups/

@@ -1,5 +1,13 @@
 {
   "name": "bancada",
+  "version": "1.0.0",
   "private": true,
-  "scripts": { "build": "node scripts/build.mjs" }
+  "description": "Gestão interna de marcenaria",
+  "engines": { "node": ">=22.16.0" },
+  "scripts": {
+    "dev": "npm run build && npm run start",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/serve.mjs",
+    "check": "node --check src/app.js && node --check src/cloud.js && node --check scripts/build.mjs && node --check scripts/serve.mjs"
+  }
 }
