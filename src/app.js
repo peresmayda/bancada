@@ -1133,7 +1133,7 @@ function pieceDXF(text){
     });
     if(!valid)return;
     var layer=value(entity,8),row=pieceRecord({nome:layer&&layer!=='0'?layer+' · '+(rows.length+1):'Contorno '+(rows.length+1),
-      c:+Math.max(lengths[0],lengths[1]).toFixed(6),l:+Math.min(lengths[0],lengths[1]).toFixed(6),unidade:unit},'media','DXF · contorno fechado');
+      c:+Math.max(lengths[0],lengths[1]).toFixed(6),l:+Math.min(lengths[0],lengths[1]).toFixed(6),unidade:unit,material:layer&&layer!=='0'?layer:''},'media','DXF · contorno fechado');
     row.nome.grade='baixa';rows.push(row);
   });
   return rows;
@@ -1218,34 +1218,125 @@ async function readProjectFile(file){
     var isMobcloud=all.some(function(x){return /especificacao\.mobcloud\.com\.br/i.test(x.str)})&&
       all.some(function(x){return /^(LAYOUT\s+\d+|Orçamento do projeto\s*#\s*\d+)/i.test(x.str.trim())});
     if(isMobcloud)result.mobcloud=mobcloudReport(pages);
-    result.pieces=piecePDF(pages,isMobcloud);
+    if(!isMobcloud){result.materials=materialPDF(pages);if(!result.materials)result.pieces=piecePDF(pages,false);}
     if(!pages.some(function(page){return page.some(function(x){return x.str.trim()})}))throw new Error('O PDF está em imagem. Envie a versão com texto selecionável ou a lista em CSV.');
   }else{
     var source=decodeProjectText(bytes);
     if(/^\s*AutoCAD Binary DXF/i.test(source)||/^\s*0\s*\r?\n\s*SECTION\s*\r?\n/i.test(source)||suffix==='dxf'){
       result.format='DXF';result.pieces=pieceDXF(source);
     }else if(/^\s*</.test(source)||suffix==='xml'){
-      result.format='XML';result.pieces=pieceXML(source);
+      result.format='XML';result.materials=materialXML(source);if(!result.materials.length)result.pieces=pieceXML(source);
     }else{
+      result.materials=materialTable(source);
       var table=pieceTable(source);
       result.format=table?'CSV':'TXT';result.pieces=table||pieceTextRows(source,'TXT');
     }
   }
-  if(!result.pieces.length&&!result.mobcloud){
-    if(result.format==='DXF')throw new Error('Não encontrei contornos retangulares fechados no DXF. Exporte as peças como polilinhas fechadas ou envie a lista de peças.');
-    throw new Error('Não encontrei peças e dimensões. Confira se o arquivo contém uma lista com comprimento e largura.');
+  if(!result.pieces.length&&!result.mobcloud&&!(result.materials&&result.materials.length)){
+    if(result.format==='DXF')throw new Error('Não encontrei materiais no DXF. Envie a lista de materiais ou um DXF com contornos fechados e materiais identificados nas camadas.');
+    throw new Error('Não encontrei uma lista de materiais. Envie um arquivo com material e quantidade ou o orçamento do Mobcloud.');
   }
   return result;
+}
+function materialPDF(pages){
+  var text=pages.map(function(page){
+    var lines=[];
+    page.forEach(function(item){
+      var line=lines.find(function(l){return Math.abs(l.y-item.transform[5])<3});
+      if(!line){line={y:item.transform[5],items:[]};lines.push(line)}
+      line.items.push(item);
+    });
+    return lines.sort(function(a,b){return b.y-a.y}).map(function(l){
+      return l.items.sort(function(a,b){return a.transform[4]-b.transform[4]}).map(function(i){return i.str}).join(';');
+    }).join('\n');
+  }).join('\n');
+  return materialTable(text);
+}
+function materialXML(text){
+  var doc=new DOMParser().parseFromString(text,'application/xml');
+  if(doc.querySelector('parsererror'))throw new Error('O XML está inválido. Confira o arquivo exportado.');
+  return Array.from(doc.querySelectorAll('*')).flatMap(function(el){
+    if(!/^(material|produto|insumo|chapa|fita)$/.test(mobcloudKey(el.localName)))return [];
+    function get(names){
+      for(var name of names){
+        if(el.hasAttribute(name))return el.getAttribute(name);
+        var child=Array.from(el.children).find(function(c){return mobcloudKey(c.localName)===name&&!c.children.length});
+        if(child)return child.textContent.trim();
+      }
+      return '';
+    }
+    var name=get(['nome','descricao','name']),qty=get(['quantidade','qtd','qty']);
+    return name&&qty?[{name:name,qty:pieceNumber(qty),unit:get(['unidade','un','unit'])}]:[];
+  });
+}
+function materialTable(text){
+  for(var separator of [';','\t',',','|']){
+    var rows=pieceDelimited(text,separator),head=rows.findIndex(function(row){
+      var keys=row.map(function(h){return mobcloudKey(h)});
+      return keys.some(function(k){return /^(material|descricao|produto|insumo)$/.test(k)})&&keys.some(function(k){return /^(qtd\.?|qtde\.?|quantidade)$/.test(k)});
+    });
+    if(head<0)continue;
+    var keys=rows[head].map(function(h){return mobcloudKey(h)});
+    // Tabelas de corte precisam ser agrupadas pelo material; a quantidade é de peças.
+    if(rows[head].map(pieceKey).includes('c')&&rows[head].map(pieceKey).includes('l'))return null;
+    var name=keys.findIndex(function(k){return /^(material|descricao|produto|insumo)$/.test(k)});
+    var qty=keys.findIndex(function(k){return /^(qtd\.?|qtde\.?|quantidade)$/.test(k)});
+    var unit=keys.findIndex(function(k){return /^(un\.?|unidade|unit)$/.test(k)});
+    return rows.slice(head+1).filter(function(r){return r[name]&&mobcloudKey(r[name])!==keys[name]&&!/^(total|subtotal)$/i.test(r[name])}).map(function(r){return {name:r[name],qty:pieceNumber(r[qty]),unit:unit<0?'':r[unit]}});
+  }
+  return null;
+}
+function projectMaterials(source){
+  var report={id:'',tipo:'materiais',origem:source.format,arquivo:source.name,chapas:[],fitas:[],itens:[]};
+  var groups=new Map(),unidentified=0;
+  function add(type,name,qty,unit,area,uncertain){
+    if(/^(lateral(?: direita| esquerda)?|fundo|base|topo|tampo|porta|prateleira)(?: \d+)?$/i.test(name.trim())){unidentified++;return}
+    var key=type+':'+mobcloudMaterialName(name)+':'+mobcloudKey(unit||'');
+    var row=groups.get(key);
+    if(!row){row={key:key,name:name,qty:0,unit:unit||'',area:0,ambiguous:!!uncertain,grade:'alta'};groups.set(key,row);report[type].push(row)}
+    if(Number.isFinite(qty)&&qty>0)row.qty+=qty;else row.ambiguous=true;
+    row.area+=area||0;
+    if(uncertain)row.ambiguous=true;
+  }
+  (source.materials||[]).forEach(function(row){
+    var unit=mobcloudKey(row.unit||'');
+    var type=/^(chapas?|boards?|sheets?)$/.test(unit)||/\b(mdf|mdp|compensado)\b/i.test(row.name)?'chapas':/fita/i.test(row.name)&&/^(m|metro|metros)$/.test(unit)?'fitas':'itens';
+    var areaUnit=/^(m2|m²)$/.test(unit);
+    add(type,row.name,type==='chapas'&&areaUnit?null:row.qty,unit,areaUnit?row.qty:0,!unit||type==='chapas'&&!/^(chapas?|boards?|sheets?|un\.?|unidades?)$/.test(unit));
+  });
+  (source.materials&&source.materials.length?[]:source.pieces||[]).forEach(function(row){
+    var name=String(row.material.value||'').trim();
+    if(!name){unidentified++;return}
+    var c=pieceNumber(row.c.value),l=pieceNumber(row.l.value),qty=pieceNumber(row.qtd.value);
+    var area=c*l*PIECE_UNITS[row.c.unit]*PIECE_UNITS[row.l.unit]*qty/1000000;
+    add('chapas',name,null,'chapa',Number.isFinite(area)&&area>0?area:0,true);
+  });
+  report.semMaterial=unidentified;
+  estimateMaterialSheets(report,2750,1850,85);
+  if(!report.chapas.length&&!report.fitas.length&&!report.itens.length)throw new Error('Não encontrei materiais identificados. Envie a lista de materiais ou um arquivo com a coluna Material; nomes como lateral e fundo são ignorados.');
+  return report;
+}
+function estimateMaterialSheets(report,c,l,use){
+  report.chapas.forEach(function(row){
+    if(!row.area||!row.ambiguous&&!row.estimated)return;
+    row.estimated=true;
+    row.qty=c>0&&l>0&&use>0&&use<=100?Math.ceil(row.area/(c*l/1000000*use/100)-1e-9):0;
+  });
+}
+function pieceMaterialSummary(source){
+  var report;
+  try{report=projectMaterials(source)}catch(e){return '<p class="alert warn">Preencha o material de cada peça na conferência para calcular os totais.</p>'}
+  return '<div class="sec"><h2>Consumo agrupado por material</h2>'+report.chapas.map(function(r){return '<p><b>'+esc(r.name)+'</b> · '+dec(r.area,3)+' m²'+(r.qty?' · cerca de '+r.qty+' chapa(s)':'')+'</p>'}).join('')+
+    '<p class="muted small">Soma de comprimento × largura × quantidade. A estimativa considera chapa de 2.750 × 1.850 mm e 85% de aproveitamento; confira esses valores na próxima tela. Medidas sem unidade precisam ser conferidas.</p></div>';
 }
 function reviewProjectImport(results){
   var reports=results.map(function(x){return x.mobcloud});
   if(results.length===2&&reports.some(function(x){return !x}))throw new Error('Escolha um arquivo por vez ou os dois PDFs Mobcloud do mesmo projeto.');
-  var report=reports[0]?joinMobcloud(reports):null;
-  var source=report&&results.find(function(r){return r.mobcloud.tipo==='orcamento'&&r.pieces.length})||
-    results.find(function(r){return r.pieces.length})||results[0];
-  ui.projectImport={source:source,report:report};
-  if(!source.pieces.length&&report){mobcloudPreview(report);return}
-  showPieceReview(source,report);
+  if(reports[0]){ui.projectImport=null;mobcloudPreview(joinMobcloud(reports));return}
+  var source=results[0];
+  if(source.materials&&source.materials.length){ui.projectImport=null;mobcloudPreview(projectMaterials(source));return}
+  ui.projectImport={source:source,report:null};
+  showPieceReview(source,null);
 }
 function showPieceReview(source,report){
   var rows=source.pieces;
@@ -1263,19 +1354,19 @@ function showPieceReview(source,report){
       '<div class="'+(dimensions?'piece-dimension':'')+'"><input class="in" id="'+id+'"'+(numeric?' inputmode="'+(dimensions?'decimal':'numeric')+'"':'')+' value="'+esc(f.value)+'">'+
       (dimensions?units(f.unit,id+'-unit'):'')+'</div></div>';
   }
-  openModal({title:'Conferir peças importadas',wide:true,
-    body:'<p><b>'+esc(source.format)+'</b> · '+esc(source.name)+' · '+rows.length+' linhas de peças</p>'+
+  openModal({title:'Conferir consumo por material',wide:true,
+    body:pieceMaterialSummary(source)+'<p><b>'+esc(source.format)+'</b> · '+esc(source.name)+' · '+rows.length+' linhas de peças</p>'+
       '<p class="muted small">Alta: lido de uma coluna ou campo. Média: estimado pelo texto ou desenho. Baixa: valor inferido ou incompleto. Confira as medidas e ajuste o que precisar.</p>'+
       (discrepancy?'<p class="alert warn">Foram lidas '+observed+' peças de '+report.pecas+' indicadas no plano. Confira a lista antes de seguir.</p>':'')+
       (rows.some(function(row){return !row.c.unit||!row.l.unit})?'<div class="actions piece-import-bulk">'+
         '<label for="piece-default-unit">Preencher unidades em branco</label><select class="in" id="piece-default-unit"><option value="mm">mm</option><option value="cm">cm</option><option value="m">m</option><option value="pol">pol</option><option value="ft">ft</option></select>'+
         '<button class="btn btn-sm" data-act="pieceFillUnits">Aplicar</button></div>':'')+
-      rows.map(function(row,i){
+      '<details><summary>Conferir peças e medidas de origem</summary>'+rows.map(function(row,i){
         return '<fieldset class="field scope-item piece-review-row"><legend>Peça '+(i+1)+'</legend><div class="piece-review-fields">'+
           input(row,'nome','Nome',i)+input(row,'qtd','Quantidade',i)+input(row,'c','Comprimento',i)+input(row,'l','Largura',i)+input(row,'material','Material',i)+
           '</div><div class="actions"><span class="muted small">'+esc(row.origin)+'</span><label class="chk"><input type="checkbox" id="import-piece-'+i+'-include" checked> Incluir peça</label></div></fieldset>';
-      }).join('')+'<p id="piece-review-error" class="small" role="status"></p>',
-    foot:'<button class="btn btn-primary" data-act="pieceConfirm">'+(report?'Confirmar peças e seguir para materiais':'Confirmar e criar rascunho')+'</button>'});
+      }).join('')+'</details><p id="piece-review-error" class="small" role="status"></p>',
+    foot:'<button class="btn btn-primary" data-act="pieceConfirm">'+'Confirmar e conferir materiais'+'</button>'});
 }
 function confirmProjectPieces(){
   var current=ui.projectImport;if(!current||readOnly)return;
@@ -1285,6 +1376,7 @@ function confirmProjectPieces(){
     if(!include||!include.checked)continue;
     var nome=val(id+'nome').trim(),qty=pieceNumber(val(id+'qtd')),c=pieceNumber(val(id+'c')),l=pieceNumber(val(id+'l'));
     var uc=pieceUnit(val(id+'c-unit')),ul=pieceUnit(val(id+'l-unit'));
+    if(!val(id+'material').trim()){$('#piece-review-error').textContent='Informe o material da peça '+(i+1)+' para somar o consumo corretamente.';return}
     if(!nome||!Number.isSafeInteger(qty)||qty<=0||!Number.isFinite(c)||!Number.isFinite(l)||c<=0||l<=0||!uc||!ul){
       $('#piece-review-error').textContent='Confira o nome, a quantidade, as dimensões e as unidades da peça '+(i+1)+'.';return;
     }
@@ -1296,31 +1388,22 @@ function confirmProjectPieces(){
   }
   if(!rows.length){$('#piece-review-error').textContent='Inclua pelo menos uma peça.';return}
   ui.projectImport=null;
-  if(current.report){current.report.pecasConferidas=rows;mobcloudPreview(current.report);return}
-  var d=newDraft();
-  d.titulo=current.source.name.replace(/\.[^.]+$/,'')||'Projeto importado';
-  d.chapas=[];d.fitas=[];d.itens=[];d.pecasImportadas=rows;d.origemPecas=current.source.format;
-  openImportedDraft(d);
+  if(current.report){mobcloudPreview(current.report);return}
+  var source={name:current.source.name,format:current.source.format,pieces:rows.map(function(r){return pieceRecord({nome:r.nome,qtd:r.qtd,c:r.c,l:r.l,material:r.material,unidade:'mm'},'alta','Conferido')})};
+  mobcloudPreview(projectMaterials(source));
 }
 function openImportedDraft(d){
   ui.step=1;ui.draft=d;ui.quoteId=d.id;ui.qFilter='todos';
   closeModal();autoSaveDraft();render();live();window.scrollTo(0,0);
-}
-function importedPiecesHTML(q){
-  var rows=q.pecasImportadas;
-  if(!Array.isArray(rows)||!rows.length)return '';
-  var count=rows.reduce(function(sum,row){return sum+n(row.qtd)},0);
-  return '<div class="sec"><details><summary><b>Peças importadas ('+count+')</b></summary><div class="scroll" role="region" aria-label="Lista de peças importadas" tabindex="0"><table class="tbl">'+
-    '<thead><tr><th>Peça</th><th>Qtd.</th><th>Comprimento</th><th>Largura</th><th>Material</th></tr></thead><tbody>'+
-    rows.map(function(r){return '<tr><td>'+esc(r.nome)+'</td><td>'+esc(r.qtd)+'</td><td>'+dec(r.c,2)+' mm</td><td>'+dec(r.l,2)+' mm</td><td>'+esc(r.material||'—')+'</td></tr>'}).join('')+
-    '</tbody></table></div></details><p class="muted small">Confira as chapas, fitas e ferragens no orçamento de materiais.</p></div>';
 }
 function mobcloudCountUnit(product){
   return product&&/^(un\.?|unidades?|pe[cç]as?)$/i.test(String(product.un||'un.').trim());
 }
 function mobcloudComponentChanged(input,index){
   var report=ui.mobcloud,row=report&&report.itens[index],qty=$('#'+input.id+'-qty');
-  if(!row||!qty||row.ambiguous)return;
+  if(!row||!qty)return;
+  if(report.origem){var selected=S.config.materiais.find(function(m){return m.id===input.value});qty.value=selected&&!row.ambiguous&&mobcloudKey(selected.un||'un.')===mobcloudKey(row.unit)?row.qty:'';return}
+  if(row.ambiguous)return;
   var product=S.config.materiais.find(function(m){return m.id===input.value});
   if(mobcloudCountUnit(product)){if(!qty.value)qty.value=row.qty}
   else if(n(qty.value)===row.qty)qty.value='';
@@ -1337,21 +1420,25 @@ function mobcloudPreview(report){
     var choices=type==='chapas'?null:items.map(function(m){return [m.id,m.nome+(type==='fitas'?' · rolo '+dec(m.metros,0)+' m':' · '+(m.un||'un.'))+' · '+brl(m.preco)]});
     if(type==='itens')choices.push(['__skip__','Não lançar neste rascunho']);
     var qty=type==='fitas'?(item.ambiguous?dec(item.qty,2)+' no PDF, unidade a conferir':dec(item.metros==null?item.qty:item.metros,2)+' m de fita'):
-      type==='chapas'?item.qty+(item.qty===1?' chapa':' chapas'):'Quantidade no PDF: '+dec(item.qty,2);
+      type==='chapas'?(item.estimated?'Quantidade estimada por área; confira abaixo':item.ambiguous?'Quantidade de chapas a confirmar':item.qty+(item.qty===1?' chapa':' chapas')):'Quantidade no arquivo: '+dec(item.qty,2)+(item.unit?' '+item.unit:'');
     var label={chapas:'Chapa do catálogo',fitas:'Fita do catálogo',itens:'Componente do catálogo'}[type];
     var product=items.find(function(m){return m.id===mapped});
-    var confirmation=type==='fitas'&&item.ambiguous?field('Metros para orçar',id+'-qty','',{type:'number',step:'0.01'}):
-      type==='itens'?field('Quantidade na unidade do catálogo',id+'-qty',!item.ambiguous&&mobcloudCountUnit(product)?item.qty:'',{type:'number',step:'any'}):'';
+    var confirmation=type==='chapas'?field('Chapas para orçar',id+'-qty',item.estimated||!item.ambiguous?item.qty:'',{type:'number',step:'1'}):type==='fitas'&&item.ambiguous?field('Metros para orçar',id+'-qty','',{type:'number',step:'0.01'}):
+      type==='itens'?field('Quantidade na unidade do catálogo',id+'-qty',!item.ambiguous&&(report.origem?product&&mobcloudKey(product.un||'un.')===mobcloudKey(item.unit):mobcloudCountUnit(product))?item.qty:'',{type:'number',step:'any'}):'';
     var picker=type==='chapas'?'<div class="field"><label for="'+id+'">'+label+'</label><select class="in" id="'+id+'"><option value="">Selecione o equivalente</option>'+chapaOpts(items,mapped)+'</select></div>':
       selectF(label,id,mapped,[['','Selecione o equivalente']].concat(choices));
     return '<div class="sec"><p><b>'+esc(item.name)+'</b></p><p class="muted small">'+esc(qty)+'</p>'+
+      '<p class="muted small">Material: confiança '+(item.grade||'alta')+'. Quantidade: '+(item.estimated?'estimada, confira':item.ambiguous?'a confirmar':'lida do arquivo')+'.</p>'+
+      (item.area?'<p class="muted small">Área identificada: '+dec(item.area,3)+' m². Quantidade estimada por área, sem otimizar o corte. Confira o plano de corte e as perdas.</p>':'')+
       (item.extra?pill('warn','Não incluso na produção'):'')+
       '<div class="fgrid">'+picker+confirmation+'</div></div>';
   }
   var source={corte:'Plano de corte',orcamento:'Orçamento',combinado:'Orçamento e plano de corte'}[report.tipo];
-  openModal({title:'Conferir importação do Mobcloud',wide:true,
-    body:'<p><b>Projeto '+esc(report.id)+'</b> · '+source+' · '+report.totalChapas+' chapas'+
-      (report.pecas==null?'':' · '+report.pecas+' peças · '+report.cortes+' cortes')+'</p>'+
+  openModal({title:'Conferir materiais importados',wide:true,
+    body:'<p><b>'+esc(report.arquivo||'Projeto Mobcloud '+report.id)+'</b> · '+esc(source||report.origem)+'</p>'+
+      '<p class="muted small">As peças são somadas pelo material usado. Lateral, fundo e outros nomes não viram itens de compra.</p>'+
+      (report.chapas.some(function(r){return r.estimated})?'<div class="sec"><h2>Estimativa de chapas</h2><div class="fgrid">'+field('Comprimento da chapa (mm)','material-sheet-c',2750,{type:'number',step:'any'})+field('Largura da chapa (mm)','material-sheet-l',1850,{type:'number',step:'any'})+field('Aproveitamento estimado (%)','material-sheet-use',85,{type:'number',step:'any'})+'</div><button class="btn btn-sm" data-act="materialRecalc">Recalcular quantidades estimadas</button><p class="muted small">A estimativa por área não garante que as peças caibam no corte. Para materiais de tamanhos diferentes, ajuste cada quantidade abaixo conforme o plano.</p></div>':'')+
+      (report.semMaterial?'<p class="alert warn">Há linhas sem material identificado. Elas não entram nesta lista; confira os materiais ausentes com o projetista.</p>':'')+
       (report.producao||report.venda?'<p class="muted small">Referência do PDF: produção '+esc(report.producao||'—')+' · venda '+esc(report.venda||'—')+'. O preço do rascunho usa o catálogo do Bancada.</p>':'')+
       '<p class="muted small">Associe cada material ao catálogo do Bancada. Cadastre os equivalentes que faltarem em Ajustes.</p>'+
       report.chapas.map(function(row,i){return options('chapas',row,i)}).join('')+report.fitas.map(function(row,i){return options('fitas',row,i)}).join('')+
@@ -1364,7 +1451,7 @@ async function openMobcloudFile(input){
   var files=Array.from(input.files),status=$('#mobcloud-status');
   if(!files.length||!status||readOnly)return;
   if(files.length>2){status.textContent='Escolha um arquivo ou dois PDFs Mobcloud do mesmo projeto.';input.value='';return}
-  input.disabled=true;status.textContent=files.length===2?'Lendo os arquivos…':'Detectando o formato e lendo as peças…';
+  input.disabled=true;status.textContent=files.length===2?'Lendo os arquivos…':'Detectando o formato e lendo os materiais…';
   try{
     var results=[];
     for(var file of files)results.push(await readProjectFile(file));
@@ -1388,8 +1475,8 @@ function applyMobcloud(){
       if(type==='itens'&&id==='__skip__'){skipped++;continue}
       var product=catalog.find(function(m){return m.id===id});
       if(!product||type==='fitas'&&n(product.metros)<=0){toast('Associe os materiais e componentes aos itens do catálogo.');return}
-      var qty=type==='chapas'?source.qty:type==='fitas'&&!source.ambiguous?(source.metros==null?source.qty:source.metros):n(val(fieldId+'-qty'));
-      if(!Number.isFinite(qty)||qty<=0){toast('Confira a quantidade de '+source.name+'.');return}
+      var qty=type==='chapas'?n(val(fieldId+'-qty')):type==='fitas'&&!source.ambiguous?(source.metros==null?source.qty:source.metros):n(val(fieldId+'-qty'));
+      if(!Number.isFinite(qty)||qty<=0||type==='chapas'&&!Number.isSafeInteger(qty)){toast('Confira a quantidade de '+source.name+'.');return}
       mapped[source.key]=mapped[type+':'+mobcloudMaterialName(source.name)]=id;
       matches.set(id,(matches.get(id)||0)+qty);
     }
@@ -1400,9 +1487,9 @@ function applyMobcloud(){
   }
   S.config.mobcloudMap=Object.assign({},S.config.mobcloudMap,mapped);
   var estimate=$('#mob-estimate').checked;
-  d.titulo='Projeto Mobcloud '+data.id;
-  d.mobcloud={id:data.id,tipo:data.tipo,pecas:data.pecas,estimarHoras:estimate,componentes:data.itens.length,omitidos:skipped};
-  if(data.pecasConferidas){d.pecasImportadas=data.pecasConferidas;d.origemPecas='PDF'}
+  d.titulo=data.arquivo?data.arquivo.replace(/\.[^.]+$/,''):'Projeto Mobcloud '+data.id;
+  if(!data.origem)d.mobcloud={id:data.id,tipo:data.tipo,estimarHoras:estimate,componentes:data.itens.length,omitidos:skipped};
+  else d.importacaoMateriais={arquivo:data.arquivo,formato:data.origem};
   if(estimate){var hours=sugHoras(d);d.horasOficina=hours.of;d.horasInstalacao=hours.inst}
   ui.mobcloud=null;openImportedDraft(d);
 }
@@ -1510,7 +1597,7 @@ function vEditor(){
     var fRows=(d.fitas||[]).map(function(r,i){return '<div class="rowform"><select class="in" data-row="fitas" data-i="'+i+'" data-k="id" aria-label="Fita de borda">'+C.fitas.map(function(f){return '<option value="'+f.id+'"'+(f.id===r.id?' selected':'')+'>'+esc(f.nome)+' · rolo de '+dec(f.metros,0)+' m — '+brl(f.preco)+'</option>'}).join('')+'</select><input class="in r" type="number" step="1" min="0" data-row="fitas" data-i="'+i+'" data-k="qtd" value="'+esc(r.qtd)+'" aria-label="Quantidade de rolos"><span class="sub" data-sub="fitas" data-i="'+i+'"></span><button class="icon-btn" data-act="delRow" data-row="fitas" data-i="'+i+'" aria-label="Remover fita">×</button></div>'}).join('');
     var iRows=(d.itens||[]).map(function(r,i){return '<div class="rowform"><select class="in" data-row="itens" data-i="'+i+'" data-k="id" aria-label="Material">'+matOpts(r.id)+'</select><input class="in r" type="number" step="any" min="0" data-row="itens" data-i="'+i+'" data-k="qtd" value="'+esc(r.qtd)+'" aria-label="Quantidade"><span class="sub" data-sub="itens" data-i="'+i+'"></span><button class="icon-btn" data-act="delRow" data-row="itens" data-i="'+i+'" aria-label="Remover item">×</button></div>'}).join('');
     var head='<div class="rowform head"><span>Material</span><span style="text-align:right">Qtd.</span><span style="text-align:right">Subtotal</span><span></span></div>';
-    sec=importedPiecesHTML(d)+(d.mobcloud?'<div class="sec"><p class="muted small">Projeto Mobcloud '+esc(d.mobcloud.id)+(d.mobcloud.pecas==null?'':' · '+esc(d.mobcloud.pecas)+' peças')+'. Confira ferragens e insumos antes de calcular.'+
+    sec=(d.mobcloud?'<div class="sec"><p class="muted small">Projeto Mobcloud '+esc(d.mobcloud.id)+(d.mobcloud.pecas==null?'':' · '+esc(d.mobcloud.pecas)+' peças')+'. Confira ferragens e insumos antes de calcular.'+
       (d.mobcloud.omitidos?' '+esc(d.mobcloud.omitidos)+' componentes do PDF ficaram fora do rascunho.':'')+'</p></div>':'')+
     '<div class="sec"><div class="sec-h"><h2>Chapas</h2><span class="muted">Quantas chapas inteiras vão ser compradas</span></div><div class="rows">'+head+chRows+'</div><button class="btn btn-sm add" data-act="addRow" data-row="chapas">+ Adicionar chapa</button></div>'+
     '<div class="sec"><div class="sec-h"><h2>Fita de borda</h2><span class="muted">Cobrada pelo rolo inteiro</span></div><div class="rows">'+(fRows?head.replace('Material','Fita').replace('Qtd.','Rolos')+fRows:'<span class="muted small">Nenhuma fita adicionada.</span>')+'</div><p class="muted small" id="fita-hint" style="margin:8px 0 0"></p><button class="btn btn-sm add" data-act="addRow" data-row="fitas">+ Adicionar fita</button></div>'+
@@ -2301,14 +2388,14 @@ function aOficina(){
 function cfgLive(){
   var hl=$('#hd-live');if(hl&&ui.cfg){hl.innerHTML=hdTiles(ui.cfg);var hc=$('#hd-cap');if(hc)hc.innerHTML=hdCap(ui.cfg)}
   var el=$('#cfg-live');if(!el)return;var of=oficina(ui.cfg);
-  el.innerHTML='<div class="card"><div class="bigs"><div class="hl"><span class="k">Custo da sua hora</span><span class="big">'+brl(of.custoHora)+'</span></div><div><span class="k">Custos fixos</span><span class="big" style="font-size:18px">'+brl0(of.fixos)+'</span></div><div><span class="k">Equipe (com encargos)</span><span class="big" style="font-size:18px">'+brl0(of.folha)+'</span></div><div><span class="k">Horas produtivas</span><span class="big" style="font-size:18px">'+dec(of.horas,0)+' h</span></div></div><div class="brk"><p class="muted small">Custo da hora = (custos fixos + equipe) ÷ horas produtivas. Cada hora orçada já carrega aluguel, luz, salários e o seu pró-labore.</p></div></div>';
+  el.innerHTML='<div class="card"><div class="bigs"><div class="hl"><span class="k">Custo da hora por pessoa</span><span class="big">'+brl(of.custoHora)+'</span></div><div><span class="k">Custos fixos</span><span class="big" style="font-size:18px">'+brl0(of.fixos)+'</span></div><div><span class="k">Equipe (com encargos)</span><span class="big" style="font-size:18px">'+brl0(of.folha)+'</span></div><div><span class="k">Horas produtivas</span><span class="big" style="font-size:18px">'+dec(of.horas,0)+' h</span></div></div><div class="brk"><p class="muted small">Hora produtiva é o tempo disponível para trabalhar nos projetos, após descontar pausas e outras atividades pelo percentual de aproveitamento. O cálculo soma as horas do dono e da equipe ativa. Custo por pessoa-hora = (custos fixos + folha com encargos) ÷ horas produtivas totais.</p><p class="muted small">Ao cadastrar alguém, o custo mensal e a capacidade aumentam. O valor por hora pode cair porque os custos fixos são divididos entre mais horas. Duas pessoas trabalhando por 8 horas representam 16 horas no orçamento. Essa conta depende de ocupar a capacidade estimada; reduza o aproveitamento se houver ociosidade.</p></div></div>';
   var ab=$('#cfg-actions [data-act="cfgReset"]');if(ab)ab.disabled=JSON.stringify(ui.cfg)===JSON.stringify(S.config);
 }
 function aEquipe(){
   var ativos=S.equipe.filter(function(e){return e.status!=='Desligado'});
   var total=ativos.reduce(function(a,e){return a+custoMensalPessoa(e)},0);
-  return '<div class="tiles"><div class="tile"><span class="k">Pessoas na equipe</span><span class="v">'+ativos.length+'</span></div><div class="tile brown"><span class="k">Custo mensal da equipe</span><span class="v">'+brl0(total)+'</span><span class="s">com encargos; empreitada fica fora</span></div><div class="tile blue"><span class="k">Custo da hora da oficina</span><span class="v">'+brl(oficina().custoHora)+'</span><span class="s">atualiza ao mudar a equipe</span></div></div>'+
-  '<div class="card scroll"><table class="tbl"><thead><tr><th>Nome</th><th>Função</th><th>Vínculo</th><th class="r">Recebe</th><th class="r">Carga</th><th class="r">Custo/mês</th><th>Situação</th><th></th></tr></thead><tbody>'+
+  return '<div class="tiles"><div class="tile"><span class="k">Pessoas na equipe</span><span class="v">'+ativos.length+'</span></div><div class="tile brown"><span class="k">Custo mensal da equipe</span><span class="v">'+brl0(total)+'</span><span class="s">com encargos; empreitada fica fora</span></div><div class="tile blue"><span class="k">Custo da hora por pessoa</span><span class="v">'+brl(oficina().custoHora)+'</span><span class="s">custos e horas disponíveis da equipe</span></div></div>'+
+  '<div class="card scroll"><table class="tbl"><thead><tr><th>Nome</th><th>Função</th><th>Vínculo</th><th class="r">Recebe</th><th class="r">Horas nos projetos</th><th class="r">Custo/mês</th><th>Situação</th><th></th></tr></thead><tbody>'+
   S.equipe.map(function(e){var un=e.vinculo==='Diarista'?'/dia':e.vinculo==='Empreitada'?'por projeto':'/mês';return '<tr><td><b>'+esc(e.nome)+'</b></td><td>'+esc(e.funcao)+'</td><td>'+esc(e.vinculo)+'</td><td class="r">'+(e.vinculo==='Empreitada'?'por projeto':brl(e.valor)+' '+un)+'</td><td class="r">'+(e.horasSemana?dec(e.horasSemana,0)+' h/sem':'—')+'</td><td class="r">'+(e.vinculo==='Empreitada'?'—':brl0(custoMensalPessoa(e)))+'</td><td>'+pill(e.status==='Ativo'?'ok':e.status==='Desligado'?'rascunho':'warn',e.status)+'</td><td class="r"><button class="btn btn-sm" data-act="editPessoa" data-id="'+e.id+'">Editar</button></td></tr>'}).join('')+'</tbody></table></div><p class="muted small" style="margin-top:10px">Os valores de salário ficam visíveis só para quem tem acesso a esta página.</p>';
 }
 function pessoaModal(e){
@@ -2316,7 +2403,7 @@ function pessoaModal(e){
   openModal({title:isNew?'Adicionar pessoa':e.nome,body:
     '<div class="fgrid">'+field('Nome','pe-nome',e.nome)+field('Função','pe-funcao',e.funcao,{ph:'Montador, ajudante, pintor'})+'</div>'+
     '<div class="fgrid">'+selectF('Vínculo','pe-vinculo',e.vinculo,VINCULOS)+field('Valor (mês, dia ou projeto)','pe-valor',e.valor,{type:'number',step:'any'})+field('Dias por mês (diarista)','pe-dias',e.diasMes,{type:'number',step:'any'})+'</div>'+
-    '<div class="fgrid">'+field('Carga horária (h/semana)','pe-horas',e.horasSemana,{type:'number',step:'any'})+selectF('Situação','pe-status',e.status,SITUACOES)+field('Início','pe-inicio',e.inicio,{type:'date'})+'</div>'+field('Telefone','pe-tel',e.telefone),
+    '<div class="fgrid">'+field('Horas por semana nos projetos','pe-horas',e.horasSemana,{type:'number',step:'any'})+selectF('Situação','pe-status',e.status,SITUACOES)+field('Início','pe-inicio',e.inicio,{type:'date'})+'</div><p class="muted small">Informe as horas semanais disponíveis para projetos. Quem trabalha só no administrativo deve ter zero aqui: seu custo continua na folha, mas não aumenta a capacidade produtiva. O aproveitamento configurado em Ajustes é aplicado sobre essas horas.</p>'+field('Telefone','pe-tel',e.telefone),
     foot:(isNew?'':'<button class="btn btn-danger" data-act="delPessoa" data-id="'+e.id+'" style="margin-right:auto">Excluir</button>')+'<button class="btn btn-primary" data-act="savePessoa" data-id="'+e.id+'">Salvar</button>'});
 }
 function aMateriais(){
@@ -2369,7 +2456,7 @@ function hdTiles(C){
   var x=hdNums(C);
   function t(k,v,s,tone){return '<div class="tile '+(tone||'')+'"><span class="k">'+k+'</span><span class="v">'+v+'</span><span class="s">'+s+'</span></div>'}
   return '<div class="tiles" style="margin-bottom:0">'+
-   t('Custo da hora',brl(x.ch),'o que a oficina gasta por hora trabalhada')+
+   t('Custo da hora',brl(x.ch),'custo por hora produtiva de uma pessoa')+
    t('Custo do dia',brl0(x.cd),'um dia de '+dec(x.hd,0)+' h de uma pessoa')+
    t('Hora vendida',brl(x.vh),'com imposto de '+pct(n(C.imposto))+' e margem base de '+pct(n(C.margemBase)),'blue')+
    t('Dia vendido',brl0(x.vh*x.hd),'no mínimo '+brl0(x.vhMin*x.hd)+', com a margem mínima de '+pct(n(C.margemMinima)),'blue')+'</div>';
@@ -2379,7 +2466,7 @@ function hdCap(C){
   var L=0,D=0;S.obras.forEach(function(o){var rd=rendeDia(o);if(rd.real==null)return;L+=rd.real*rd.diasReal;D+=rd.diasReal});var med=D?L/D:null;
   return '<h2>Capacidade e resultado</h2><div class="brk" style="padding:0">'+
    '<div><span>Dias de trabalho por mês (toda a equipe)</span><b>'+dec(pdMes,0)+' dias</b></div>'+
-   '<div><span>Horas produtivas por mês</span><span>'+dec(x.of.horas,0)+' h</span></div>'+
+   '<div><span>Horas produtivas por mês (soma das pessoas)</span><span>'+dec(x.of.horas,0)+' h</span></div>'+
    '<div><span>Projetos ao mesmo tempo, com '+p+' pessoa'+(p===1?'':'s')+' em cada</span><span>'+dec(Math.max(1,Math.floor(pdMes/p/21.7*10)/10),1)+'</span></div>'+
    '<div class="tot"><span>Rende por dia, média dos projetos entregues</span><b style="color:var(--'+(med==null?'muted':med>=x.cd?'ok':'bad')+')">'+(med==null?'sem projetos entregues':brl0(med))+'</b></div></div>'+
    '<p class="muted small">Hora e dia vendidos são o custo com imposto e margem, sem comissão de arquiteto nem taxa de cartão. Rende por dia é o que cada dia de trabalho deixou de fato, depois de material, terceiros, impostos e taxas. Acima do custo do dia, sobrou lucro.</p>';
@@ -2414,7 +2501,7 @@ var A={
   mobcloudImport:function(){
     if(readOnly)return;
     openModal({title:'Importar projeto',body:'<div class="field"><label for="mobcloud-file">Arquivo do projetista</label><input class="in" id="mobcloud-file" type="file" accept=".pdf,.dxf,.csv,.txt,.xml" multiple></div>'+
-      '<p class="muted small" id="mobcloud-status" role="status">PDF, DXF, CSV, TXT ou XML. Para combinar orçamento e plano de corte Mobcloud, selecione os dois PDFs juntos.</p>',
+      '<p class="muted small" id="mobcloud-status" role="status">PDF, DXF, CSV, TXT ou XML. O sistema lê as peças, soma o consumo por material e pede sua conferência. Para combinar orçamento e plano de corte Mobcloud, selecione os dois PDFs juntos.</p>',
       foot:ui.mobcloud?'<button class="btn" data-act="mobcloudResume">Voltar à conferência</button>':''});
   },
   mobcloudResume:function(){if(ui.mobcloud)mobcloudPreview(ui.mobcloud)},
@@ -2422,6 +2509,14 @@ var A={
   pieceFillUnits:function(){
     var unit=val('piece-default-unit');
     $$('select[id^="import-piece-"][id$="-unit"]').forEach(function(select){if(!select.value)select.value=unit});
+  },
+  materialRecalc:function(){
+    var report=ui.mobcloud,c=pieceNumber(val('material-sheet-c')),l=pieceNumber(val('material-sheet-l')),use=pieceNumber(val('material-sheet-use'));
+    if(!report)return;
+    if(!(c>0&&l>0&&use>0&&use<=100)){toast('Informe as medidas da chapa e um aproveitamento maior que zero e até 100%.');return}
+    estimateMaterialSheets(report,c,l,use);
+    report.chapas.forEach(function(row,i){var input=$('#mob-chapas-'+i+'-qty');if(input&&row.estimated)input.value=row.qty});
+    toast('Quantidades estimadas recalculadas. Confira o plano de corte.');
   },
   mobcloudCatalog:function(){
     closeModal();ui.aTab='materiais';location.hash='#ajustes';render();cfgLive();
