@@ -32,7 +32,7 @@ O ambiente local acessa o banco configurado. Use uma conta de teste para experim
 
 ## Validar e publicar
 
-`npm test` confere a importação e o cálculo por pessoa-hora. `npm run check` verifica a sintaxe. `npm run build` valida a configuração e gera os três arquivos de publicação em `dist/`.
+`npm test` confere a importação, o custo por pessoa-hora e a precificação com lucro por área. `npm run check` verifica a sintaxe. `npm run build` valida a configuração e gera os três arquivos de publicação em `dist/`.
 
 A Vercel publica automaticamente o ramo `main`, usando `vercel.json`. Configure `SUPABASE_URL` e `SUPABASE_PUBLISHABLE_KEY` nos ambientes de publicação. Faça alterações em um ramo, confira a prévia da Vercel e só então integre ao `main`.
 

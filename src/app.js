@@ -410,7 +410,7 @@ function laborResources(C,of){
   return {people:people,hour:of.horas>0?indirect/of.horas:null,day:days>0?indirect/days:null};
 }
 function quoteLabor(q,C,of){
-  if(q.maoModo!=='etapas'){
+  if(q.maoModo!=='etapas'&&q.maoModo!=='separado'){
     var workshop=n(q.horasOficina),install=n(q.horasInstalacao);
     return {oficina:workshop,instalacao:install,horas:workshop+install,total:(workshop+install)*of.custoHora,hora:of.custoHora};
   }
@@ -427,15 +427,25 @@ function quoteLabor(q,C,of){
     if(row.etapa==='Instalação')install+=hours;else workshop+=hours;
     direct+=amount;rows.push({index:index,etapa:row.etapa,nome:manual?'Valor manual':p.nome,horas:hours,valor:amount});
   });
-  var hours=workshop+install,byDay=q.rateioModo==='dias',days=n(q.diasOficina);
+  var hours=workshop+install,byDay=q.maoModo==='separado'||q.rateioModo==='dias',days=n(q.diasOficina);
+  var occupation=q.maoModo==='separado'?(isAuto(q.ocupacaoPct)?100:n(q.ocupacaoPct)):100;
+  if(!error&&(!Number.isFinite(occupation)||occupation<=0||occupation>100))error='Informe a parcela de uso da empresa, maior que zero e até 100%.';
   var fee=byDay?resources.day:resources.hour;
   if(!error&&!hours)error='Em Mão de obra, lance ao menos uma etapa com horas produtivas.';
   if(!error&&(fee==null||byDay&&days<=0)){
     error=byDay?'Em Mão de obra, informe os dias de ocupação e confira os dias de funcionamento em Ajustes.':'Em Ajustes, informe a capacidade de horas produtivas da oficina.';
   }
-  var overhead=fee==null?0:(byDay?days:hours)*fee,total=direct+overhead;
+  var overhead=fee==null?0:(byDay?days:hours)*fee*occupation/100,total=direct+overhead;
   return {oficina:workshop,instalacao:install,horas:hours,total:total,hora:hours?total/hours:0,
-    detalhe:rows,direta:direct,rateio:overhead,rateioModo:byDay?'dias':'horas',erro:error};
+    detalhe:rows,direta:direct,rateio:overhead,empresaDia:resources.day,diasEmpresa:days,ocupacao:occupation,rateioModo:byDay?'dias':'horas',erro:error};
+}
+function quoteCostAreas(material,labor,of){
+  var direct=labor.direta,company=labor.rateio;
+  if(direct==null){
+    direct=of.total>0?labor.total*of.folha/of.total:0;
+    company=labor.total-direct;
+  }
+  return {material:material,maoObra:direct,empresa:company};
 }
 function sugHoras(d){var C=S.config;var ch=(d.chapas||[]).reduce(function(a,r){return a+n(r.qtd)},0);var of=Math.round(ch*n(C.horasPorChapa));return {ch:ch,of:of,inst:Math.round(of*n(C.instalacaoPct)/100)}}
 function mediaReal(){var h=0,ch=0;S.obras.forEach(function(o){var r=o.realizado||{};if(!r.fechado||!n(r.horas))return;var q=quote(o.quoteId);if(!q)return;var c=(q.chapas||[]).reduce(function(a,x){return a+n(x.qtd)},0);if(!c)return;h+=n(r.horas)/(1+n(S.config.instalacaoPct)/100);ch+=c});return ch?{hpc:h/ch,obras:ch}:null}
@@ -471,10 +481,20 @@ function calcQuote(q){
   var imp=n(C.imposto)/100,rt=n(q.rtPct)/100,m=margem/100;
   var erro=chapaRemovida?'Em Materiais, substitua a chapa que saiu do catálogo.':
     semPreco.size?'Em Ajustes → Materiais e kits, cadastre o preço por chapa: '+Array.from(semPreco).join(', ')+'.':labor.erro;
-  var den=1-imp-rt-m;var valido=den>0.05&&custo>0&&!erro;
-  var preco=valido?custo/den:0;
-  var sobra=preco*m;
-  return {q:q,erro:erro,referenciasMdf:Array.from(referenciasMdf),chapasCusto:chapasCusto,chapasQtd:chapasQtd,chapasFita:chapasFita,fitaEst:fitaEst,fitaRolos:fitaRolos,fitaMetros:fitaMetros,fitaCusto:fitaCusto,itensCusto:itensCusto,outros:outros,materialBase:materialBase,reserva:reserva,material:material,
+  var porAreas=q.precoModo==='areas',costAreas=quoteCostAreas(material,labor,oficina()),profitAreas={},lucroAlvo=0;
+  if(porAreas){
+    ['material','maoObra','empresa'].forEach(function(key){
+      var raw=q.lucros&&q.lucros[key],value=n(raw);
+      if(isAuto(raw)||!Number.isFinite(Number(String(raw).replace(',','.')))||value<0||value>100)erro=erro||'Defina o lucro sobre material, mão de obra e empresa, de 0% a 100%.';
+      profitAreas[key]=costAreas[key]*value/100;
+      lucroAlvo+=profitAreas[key];
+    });
+  }
+  var den=porAreas?1-imp-rt:1-imp-rt-m;var valido=den>0.05&&custo>0&&!erro;
+  var preco=valido?(custo+(porAreas?lucroAlvo:0))/den:0;
+  var sobra=porAreas?lucroAlvo:preco*m;
+  if(porAreas){m=preco?sobra/preco:0;margem=m*100}
+  return {q:q,erro:erro,porAreas:porAreas,custosAreas:costAreas,lucroAreas:profitAreas,lucroAlvo:lucroAlvo,referenciasMdf:Array.from(referenciasMdf),chapasCusto:chapasCusto,chapasQtd:chapasQtd,chapasFita:chapasFita,fitaEst:fitaEst,fitaRolos:fitaRolos,fitaMetros:fitaMetros,fitaCusto:fitaCusto,itensCusto:itensCusto,outros:outros,materialBase:materialBase,reserva:reserva,material:material,
     custoHora:labor.hora,horas:horas,maoObra:maoObra,labor:labor,terceiros:terceiros,frete:frete,custo:custo,ajustes:ajustes,margemSug:margemSug,manual:manual,margem:margem,
     imp:imp,rt:rt,m:m,den:den,valido:valido,preco:preco,sobra:sobra,impostoV:preco*imp,rtV:preco*rt,
     nEq:material>0?preco/material:0,N:isAuto(q.multN)?n(C.multN):n(q.multN),refN:material*(isAuto(q.multN)?n(C.multN):n(q.multN))};
@@ -483,7 +503,7 @@ function calcCond(c,f){
   var liquid=1-c.imp-c.rt-n(f.taxa)/100,d=descOf(c.q,f)/100,den=liquid-c.m;
   var floor=liquid-n(S.config.margemMinima)/100;
   var minimo=c.custo>0&&floor>0?Math.ceil(c.custo/floor*100-1e-8)/100:null;
-  var bruto=c.valido&&den>0.05?c.custo/den:0,preco=Math.round(bruto*(1-d)*100)/100;
+  var bruto=c.valido&&(c.porAreas?liquid:den)>0.05?(c.porAreas?(c.custo+c.lucroAlvo)/liquid:c.custo/den):0,preco=Math.round(bruto*(1-d)*100)/100;
   var sobra=preco*liquid-c.custo,me=preco?sobra/preco*100:0;
   var o={forma:f,preco:preco,sobra:sobra,margemEf:me,minimo:minimo,abaixo:preco>0&&(minimo==null||preco<minimo)};
   if(f.tipo==='entrada'){var q=c.q||{};var ep=isAuto(q.entradaPct)?30:n(q.entradaPct);var np=Math.max(1,Math.round(n(q.entradaParcelas))||1);o.entrada=preco*ep/100;o.nParc=np;o.parcela=(preco-o.entrada)/np}
@@ -1531,6 +1551,7 @@ function newDraft(clienteId){
   var C=S.config;var cl=clienteId&&cliente(clienteId);
   return {id:uid(),numero:null,clienteId:cl?cl.id:null,contato:{nome:cl?cl.nome:'',telefone:cl?cl.telefone:''},titulo:'',status:'rascunho',criadoEm:today(),enviadoEm:null,
     chapas:[{id:C.chapas[0]?C.chapas[0].id:'',qtd:1}],fitas:C.fitas[0]?[{id:C.fitas[0].id,qtd:1}]:[],itens:[],outros:0,horasOficina:0,horasInstalacao:0,pessoas:C.pessoasProjeto||2,terceiros:0,frete:0,
+    maoModo:'separado',maoLancamentos:[],diasOficina:'',ocupacaoPct:100,precoModo:'areas',lucros:{material:'',maoObra:'',empresa:''},
     reservaPct:C.reserva,rtNome:'',rtPct:0,respostas:{},margemManual:'',entradaPct:30,entradaParcelas:5,condicoes:(function(){var w=['pix','entrada','cred10'].filter(function(id){return forma(id)});return w.length?w:C.formas.slice(0,3).map(function(f){return f.id})})(),validade:C.validade,obs:'',motivoPerda:'',retomarEm:'',precoSalvo:0};
 }
 function proposalItemsForm(d){
@@ -1574,6 +1595,28 @@ function laborForm(d){
     (d.rateioModo==='dias'?'<div class="field"><label for="ed-diasOficina">Dias que o projeto ocupa a oficina</label>'+numIn('diasOficina',d.diasOficina,' min="0"')+'</div><p class="muted small">Use quando o projeto bloquear a capacidade da oficina nesses dias.</p>':'')+
     '<div id="labor-info"></div>';
 }
+function separatedLaborForm(d){
+  var C=S.config,resources=laborResources(C,oficina());
+  var rows=(d.maoLancamentos||[]).map(function(row,i){
+    var people=resources.people.map(function(person){return [person.id,person.nome+' · '+(person.hour==null?'configure o custo':person.inOverhead?'pró-labore na empresa':brl(person.hour)+'/h')]});
+    if(row.pessoa&&row.pessoa!=='manual'&&!people.some(function(person){return person[0]===row.pessoa}))people.push([row.pessoa,'Pessoa indisponível — substitua']);
+    people.push(['manual','Informar custo por hora']);
+    return '<fieldset class="field scope-item"><legend>Pessoa '+(i+1)+'</legend><div class="fgrid"><div class="field"><label for="mao-'+i+'-pessoa">Quem trabalha no projeto</label><select class="in" id="mao-'+i+'-pessoa" data-f="maoLancamentos.'+i+'.pessoa">'+people.map(function(person){return '<option value="'+esc(person[0])+'"'+(person[0]===row.pessoa?' selected':'')+'>'+esc(person[1])+'</option>'}).join('')+'</select></div>'+
+      '<div class="field"><label for="mao-'+i+'-horas">Horas usadas no projeto</label><input class="in r" id="mao-'+i+'-horas" type="number" min="0" step="any" data-f="maoLancamentos.'+i+'.horas" value="'+esc(row.horas)+'"></div>'+
+      (row.pessoa==='manual'?'<div class="field"><label for="mao-'+i+'-valor">Custo da mão de obra por hora (R$)</label><input class="in r" id="mao-'+i+'-valor" type="number" min="0" step="any" data-f="maoLancamentos.'+i+'.valorHora" value="'+esc(row.valorHora)+'"></div>':'')+'</div><div class="actions"><button class="btn btn-sm" data-act="laborDel" data-i="'+i+'">Remover pessoa</button><span class="muted small" data-labor-total="'+i+'"></span></div></fieldset>';
+  }).join('');
+  return '<p class="muted small">Registre as horas de cada pessoa usada no projeto. Os salários vêm da equipe, com encargos e aproveitamento. Um custo manual deve conter só a mão de obra, sem as despesas da empresa.</p>'+rows+
+    '<button class="btn btn-sm" data-act="laborAdd">+ Adicionar pessoa</button><div class="sec"><h2>Custo da empresa por dia</h2><p>Diária da empresa: <b>'+brl(resources.day)+'</b></p>'+
+    '<p class="muted small">Despesas mensais da empresa ÷ dias de funcionamento. Os salários já tratados na mão de obra ficam fora desta diária. Pró-labore sem vínculo com a mão de obra permanece nas despesas da empresa.</p><div class="fgrid"><div class="field"><label for="ed-diasOficina">Dias de execução do projeto</label>'+numIn('diasOficina',d.diasOficina,' min="0"')+'</div><div class="field"><label for="ed-ocupacaoPct">Parcela de uso da empresa (%)</label>'+numIn('ocupacaoPct',isAuto(d.ocupacaoPct)?100:d.ocupacaoPct,' min="0" max="100"')+'</div></div><p class="muted small">Use 100% quando o projeto ocupar a empresa nesses dias. Se houver projetos em paralelo, distribua a diária entre eles para não cobrar os mesmos custos duas vezes.</p></div><div id="labor-info"></div>';
+}
+function areaProfitForm(d){
+  var c=calcQuote(d),labels={material:'Material',maoObra:'Mão de obra',empresa:'Empresa'};
+  return '<div class="sec"><h2>Lucro sobre cada custo</h2><p class="muted small">De 0% a 100% sobre o custo de cada área. Um acréscimo de 100% dobra aquele custo; não é uma margem de 100% sobre o preço de venda. Terceiros e frete entram pelo custo, sem acréscimo.</p><div class="scroll"><table class="tbl"><thead><tr><th>Área</th><th class="r">Custo</th><th>Lucro sobre o custo (%)</th><th class="r">Lucro em reais</th></tr></thead><tbody>'+
+    ['material','maoObra','empresa'].map(function(key){return '<tr><td>'+labels[key]+'</td><td class="r" data-area-cost="'+key+'">'+brl(c.custosAreas[key])+'</td><td><input class="in r" type="number" min="0" max="100" step="0.5" data-f="lucros.'+key+'" id="ed-lucro-'+key+'" aria-label="Lucro sobre '+labels[key].toLowerCase()+' (%)" value="'+esc((d.lucros||{})[key])+'"></td><td class="r" data-area-profit="'+key+'">'+brl(c.lucroAreas[key])+'</td></tr>'}).join('')+'</tbody></table></div><p class="muted small">Impostos e comissão são calculados por fora desses custos e lucros. Na etapa Pagamento, taxas e descontos mostram o lucro que efetivamente sobra.</p></div>';
+}
+function profitModeForm(d){
+  return '<div class="sec"><label for="ed-precoModo">Como calcular o lucro</label><select class="in" id="ed-precoModo" data-f="precoModo"><option value="areas"'+(d.precoModo==='areas'?' selected':'')+'>Lucro por material, mão de obra e empresa</option><option value="margem"'+(d.precoModo!=='areas'?' selected':'')+'>Margem global (cálculo anterior)</option></select></div>';
+}
 function diasRound(h){var v=n(h)/horasDia();return h===''||h==null?'':String(Math.round(v*100)/100)}
 function diasIn(f,h){return '<input class="in r" type="number" step="any" min="0" inputmode="decimal" data-dias="'+f+'" id="ed-dias-'+f+'" value="'+esc(diasRound(h))+'">'}
 function numIn(f,v,extra){return '<input class="in r" type="number" step="any" inputmode="decimal" data-f="'+f+'" id="ed-'+f.replace('.','-')+'" value="'+esc(v)+'"'+(extra||'')+'>'}
@@ -1606,7 +1649,7 @@ function vEditor(){
     '<div class="sum-line" id="itens-total"></div></div>'+
     '<div class="sec"><div class="fgrid"><div class="field"><label for="ed-outros">Outros materiais (R$)</label>'+numIn('outros',d.outros)+'</div><div class="field"><label for="ed-reservaPct">Reserva para perdas (%)</label>'+numIn('reservaPct',d.reservaPct)+'</div></div></div>';
   }else if(st===2){
-    var detailed=d.maoModo==='etapas';
+    var detailed=d.maoModo==='etapas',separated=d.maoModo==='separado';
     var quick='<div class="sugg" id="sugg"></div><div class="fgrid">'+
     '<div class="field"><label for="ed-horasOficina">Horas na oficina</label>'+numIn('horasOficina',d.horasOficina)+'</div>'+
     '<div class="field"><label for="ed-dias-horasOficina">ou dias na oficina</label>'+diasIn('horasOficina',d.horasOficina)+'</div>'+
@@ -1614,8 +1657,8 @@ function vEditor(){
     '<div class="field"><label for="ed-dias-horasInstalacao">ou dias de instalação</label>'+diasIn('horasInstalacao',d.horasInstalacao)+'</div></div>'+
     '<p class="small muted">Horas e dias se convertem sozinhos. Um dia equivale a '+dec(horasDia(),0)+' h de uma pessoa.</p>';
     sec='<div class="sec"><div class="sec-h"><h2>Horas de trabalho</h2><span class="muted" id="ch-hint"></span></div>'+
-    '<div class="seg" style="margin-bottom:12px"><button class="'+(!detailed?'on':'')+'" data-act="laborMode" data-mode="rapido" aria-pressed="'+!detailed+'">Estimativa rápida</button><button class="'+(detailed?'on':'')+'" data-act="laborMode" data-mode="etapas" aria-pressed="'+detailed+'">Por etapa e profissional</button></div>'+
-    (detailed?laborForm(d):quick)+
+    '<div class="seg" style="margin-bottom:12px"><button class="'+(separated?'on':'')+'" data-act="laborMode" data-mode="separado" aria-pressed="'+separated+'">Mão de obra + empresa por dia</button><button class="'+(!detailed&&!separated?'on':'')+'" data-act="laborMode" data-mode="rapido" aria-pressed="'+(!detailed&&!separated)+'">Estimativa rápida (anterior)</button><button class="'+(detailed?'on':'')+'" data-act="laborMode" data-mode="etapas" aria-pressed="'+detailed+'">Por etapa e profissional</button></div>'+
+    (separated?separatedLaborForm(d):detailed?laborForm(d):quick)+
     '<div class="fgrid"><div class="field"><label for="ed-pessoas">Pessoas trabalhando no projeto</label>'+numIn('pessoas',isAuto(d.pessoas)?pessoasDe(d):d.pessoas,' min="1" step="1"')+'</div></div>'+
     '<p class="small muted" id="dias-info"></p></div>'+
     '<div class="sec"><h2>Terceiros e frete</h2><div class="fgrid">'+
@@ -1624,8 +1667,8 @@ function vEditor(){
     '<div class="sec"><div class="sec-h"><h2>Comissão de arquiteto</h2><span class="muted">Deixe zerado se não houver</span></div><div class="fgrid"><div class="field"><label for="ed-rtNome">Nome</label><input class="in" id="ed-rtNome" data-f="rtNome" value="'+esc(d.rtNome)+'"></div><div class="field"><label for="ed-rtPct">RT (%)</label>'+numIn('rtPct',d.rtPct)+'</div></div></div>';
   }else if(st===3){
     var qs=Q.map(function(qq){var cur=(d.respostas||{})[qq.id]||0;return '<div class="q"><span class="qt">'+esc(qq.t)+'</span><div class="qopts" role="radiogroup" aria-label="'+esc(qq.t)+'">'+qq.o.map(function(o,i){var w=(C.pesos[qq.id]||[])[i]||0;return '<label class="qopt"><input type="radio" name="q-'+qq.id+'" data-q="'+qq.id+'" value="'+i+'"'+(cur===i?' checked':'')+'><span>'+esc(o)+(w?' <em>'+(w>0?'+':'−')+Math.abs(w)+'%</em>':'')+'</span></label>'}).join('')+'</div></div>'}).join('');
-    sec='<div class="sec"><div class="sec-h"><h2>Quanto vale este projeto</h2><span class="muted">Ajusta a margem pelo que não está na lista de material</span></div>'+qs+
-    '<div class="marg"><div><span class="lbl">Margem sugerida</span><div class="big" id="marg-sug"></div><span class="muted small" id="marg-base"></span></div><div class="field" style="width:170px"><label for="ed-margemManual">Usar outra margem (%)</label>'+numIn('margemManual',d.margemManual,' placeholder="automática"')+'</div></div></div>';
+    sec=profitModeForm(d)+(d.precoModo==='areas'?areaProfitForm(d):'<div class="sec"><div class="sec-h"><h2>Quanto vale este projeto</h2><span class="muted">Ajusta a margem pelo que não está na lista de material</span></div>'+qs+
+    '<div class="marg"><div><span class="lbl">Margem sugerida</span><div class="big" id="marg-sug"></div><span class="muted small" id="marg-base"></span></div><div class="field" style="width:170px"><label for="ed-margemManual">Usar outra margem (%)</label>'+numIn('margemManual',d.margemManual,' placeholder="automática"')+'</div></div></div>');
   }else if(st===4){
     var conds=C.formas.map(function(f){var on=d.condicoes.indexOf(f.id)>=0;return '<label class="chk"><input type="checkbox" data-cond="'+f.id+'"'+(on?' checked':'')+'> '+esc(f.nome)+(n(f.taxa)?' <span class="muted small">taxa '+pct(f.taxa)+'</span>':'')+(hasDesc(f)||descOf(d,f)?' <span class="muted small" data-dl="'+f.id+'">'+(descOf(d,f)?'desconto '+pct(descOf(d,f)):'')+'</span>':'')+'</label>'+(hasDesc(f)&&on?'<div class="entrada-box"><div class="field"><label for="ed-descontos-'+f.id+'">Desconto (%)</label>'+numIn('descontos.'+f.id,descOf(d,f))+'</div><p data-descp="'+f.id+'"></p></div>':'')+(f.tipo==='entrada'&&on?'<div class="entrada-box"><div class="field"><label for="ed-entradaPct">Entrada (%)</label>'+numIn('entradaPct',isAuto(d.entradaPct)?30:d.entradaPct)+'</div><div class="field"><label for="ed-entradaParcelas">Restante em</label>'+numIn('entradaParcelas',isAuto(d.entradaParcelas)?5:d.entradaParcelas)+'</div><p id="entrada-desc"></p></div>':'')}).join('');
     sec='<div class="sec"><div class="sec-h"><h2>Formas de pagamento oferecidas</h2></div><div class="conds-pick">'+conds+'</div><div id="entrada-cx"></div><div id="ed-price-comparison"></div></div>'+
@@ -1642,10 +1685,10 @@ function vEditor(){
 }
 function sideHTML(d){
   var c=calcQuote(d),C=S.config;
-  if(c.erro)return '<div class="card"><div class="brk"><p class="alert warn">'+esc(c.erro)+'</p></div></div>';
+  if(c.erro)return '<div class="card"><div class="brk"><p class="alert warn">'+esc(c.erro)+'</p><div><span>Material</span><b>'+brl(c.material)+'</b></div><div><span>Mão de obra usada</span><b>'+brl(c.custosAreas.maoObra)+'</b></div><div><span>Empresa</span><b>'+brl(c.custosAreas.empresa)+'</b></div></div></div>';
   if(!c.valido)return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div></div><div class="brk"><div class="alert warn">'+(c.custo>0?'Imposto, comissão e margem passaram do limite. Reduza a margem.':'Preencha materiais e horas para ver o preço.')+'</div></div></div>';
-  return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div><div class="hl"><span class="k">Preço</span><span class="big">'+brl0(c.preco)+'</span></div><div><span class="k">Lucro da empresa</span><span class="big" style="color:var(--ok)">'+brl0(c.sobra)+'</span></div></div>'+
-  '<div class="brk"><div><span>Material</span><span>'+brl0(c.material)+'</span></div><div><span>Mão de obra</span><span>'+brl0(c.maoObra)+'</span></div><div><span>Terceiros e frete</span><span>'+brl0(c.terceiros+c.frete)+'</span></div><div><span>Margem</span><span>'+pct(c.margem)+'</span></div>'+
+  return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div><div class="hl"><span class="k">Preço</span><span class="big">'+brl0(c.preco)+'</span></div><div><span class="k">Lucro total</span><span class="big" style="color:var(--ok)">'+brl0(c.sobra)+'</span></div></div>'+
+  '<div class="brk"><div><span>Material</span><span>'+brl0(c.material)+'</span></div><div><span>Mão de obra usada</span><span>'+brl0(c.custosAreas.maoObra)+'</span></div><div><span>Empresa</span><span>'+brl0(c.custosAreas.empresa)+'</span></div><div><span>Terceiros e frete</span><span>'+brl0(c.terceiros+c.frete)+'</span></div><div><span>Margem</span><span>'+pct(c.margem)+'</span></div>'+
   '<div style="color:var(--brown)"><span>Material × N</span><span>× '+dec(c.nEq,1)+' <span class="muted">(ref. × '+dec(c.N)+')</span></span></div>'+
   (c.margem<n(C.margemMinima)?'<div class="alert bad">Margem abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+'</div></div>';
 }
@@ -1666,6 +1709,7 @@ function reviewHTML(d){
    '<div class="card ctrl"><div class="ctrl-h"><div><h3>Margem de lucro</h3><span class="muted small">Sugerida pelo questionário: '+pct(c.margemSug)+' · <button class="linkbtn" data-act="margSug">voltar para a sugerida</button></span></div>'+
    '<div class="rng-val"><input class="in r" type="number" step="0.5" id="rv-margem-n" data-rv="margem" value="'+Math.round(c.margem*10)/10+'" aria-label="Margem de lucro em porcentagem"><span>%</span></div></div>'+
    '<input type="range" min="0" max="60" step="0.5" id="rv-margem" data-rv="margem" value="'+c.margem+'" aria-label="Margem de lucro" class="range"><div class="range-scale"><span>0%</span><span>15%</span><span>30%</span><span>45%</span><span>60%</span></div></div>';
+  if(!locked&&d.precoModo==='areas')ctrl='<div class="card">'+areaProfitForm(d)+'</div>';
   var cmpHead='<div class="cmp-h"><h3>Comparação com material ×</h3>'+(locked?'<b>'+dec(c.N)+'</b>':'<input class="in r" type="number" step="0.1" min="0" id="rv-mult" data-rv="multN" value="'+c.N+'" aria-label="Multiplicador do material">')+'</div><p class="small" style="margin:-2px 0 6px">Padrão da oficina: × '+dec(C.multN)+'</p>';
   var form=locked?'':'<div class="card proposal-edit" id="proposal-fields"><div class="sec"><h2>Proposta para o cliente</h2>'+
     '<div class="field"><label for="ed-descricao">Descrição do serviço</label><textarea class="in" id="ed-descricao" data-f="descricao" required placeholder="Descreva o que será entregue, os ambientes, materiais e acabamentos.">'+esc(d.descricao||'')+'</textarea></div></div>'+
@@ -1696,24 +1740,24 @@ function refreshReview(){
   }
   $('#rv-top').innerHTML=(!d.proposta&&c.referenciasMdf&&c.referenciasMdf.length?'<div class="alert warn" style="margin-bottom:18px">Este orçamento usa preços de referência para '+esc(c.referenciasMdf.join(', '))+'. Confira o preço e o frete com seu fornecedor antes de enviar.</div>':'')+
     (c.margem<n(C.margemMinima)?'<div class="alert bad" style="margin-bottom:18px">A margem está abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+
-   '<div class="tiles"><div class="tile"><span class="k">Custo total</span><span class="v">'+brl0(c.custo)+'</span></div><div class="tile blue"><span class="k">Preço</span><span class="v">'+brl0(P)+'</span><span class="s">sem taxas de pagamento</span></div><div class="tile"><span class="k">Lucro da empresa</span><span class="v" style="color:var(--ok)">'+brl0(c.sobra)+'</span><span class="s">margem de '+pct(c.margem)+'</span></div></div>';
+   '<div class="tiles"><div class="tile"><span class="k">Custo total</span><span class="v">'+brl0(c.custo)+'</span></div><div class="tile blue"><span class="k">Preço</span><span class="v">'+brl0(P)+'</span><span class="s">sem taxas de pagamento</span></div><div class="tile"><span class="k">Lucro total</span><span class="v" style="color:var(--ok)">'+brl0(c.sobra)+'</span><span class="s">margem de '+pct(c.margem)+'</span></div></div>';
   function grp(t,v,items){return '<div class="grp"><div class="grp-h"><span>'+t+'</span><span>'+brl(v)+'</span></div>'+items.filter(Boolean).map(function(i){return '<div class="grp-i"><span>'+i[0]+'</span><span>'+brl(i[1])+'</span></div>'}).join('')+'</div>'}
   var labor=c.labor,detail=labor&&labor.detalhe;
   var laborRows=detail?detail.map(function(row){return [esc(row.etapa+' · '+row.nome+' · '+dec(row.horas,1)+' h'),row.valor]}).concat([['Rateio dos custos fixos',labor.rateio]]):
     [['Oficina ('+dec(n(d.horasOficina),1)+' h)',n(d.horasOficina)*c.custoHora],['Instalação ('+dec(n(d.horasInstalacao),1)+' h)',n(d.horasInstalacao)*c.custoHora],['Custo da hora',c.custoHora]];
   $('#rv-brk').innerHTML='<div class="card-head"><h3>Custo detalhado</h3></div><div class="brk2">'+
    grp('Material',c.material,[['Chapas ('+dec(c.chapasQtd,0)+')',c.chapasCusto],['Fita de borda ('+dec(c.fitaRolos,0)+' rolo'+(c.fitaRolos===1?'':'s')+')',c.fitaCusto],['Ferragens e insumos',c.itensCusto],c.outros?['Outros materiais',c.outros]:null,['Reserva para perdas ('+pct(d.reservaPct)+')',c.reserva]])+
-   grp('Mão de obra e oficina',c.maoObra,laborRows)+
+   (c.custosAreas?grp('Mão de obra usada no projeto',c.custosAreas.maoObra,detail?detail.map(function(row){return [esc(row.nome+' · '+dec(row.horas,1)+' h'),row.valor]}):[])+grp('Custo da empresa',c.custosAreas.empresa,labor&&labor.rateioModo==='dias'?[['Custo diário da empresa',labor.empresaDia],['Dias × diária × parcela de uso ('+pct(labor.ocupacao==null?100:labor.ocupacao)+')',labor.rateio]]:[]):grp('Mão de obra e oficina',c.maoObra,laborRows))+
    grp('Terceiros e frete',c.terceiros+c.frete,[['Terceiros',c.terceiros],['Frete e deslocamento',c.frete]])+
    '<div class="grp-t"><span>Custo total</span><span>'+brl(c.custo)+'</span></div>'+
    '<div class="grp-i"><span>Imposto ('+pct(c.imp*100)+')</span><span>'+brl(c.impostoV)+'</span></div>'+(c.rt?'<div class="grp-i"><span>RT '+esc(d.rtNome||'')+' ('+pct(c.rt*100)+')</span><span>'+brl(c.rtV)+'</span></div>':'')+
-   '<div class="grp-i"><span>Lucro da empresa ('+pct(c.margem)+')</span><span>'+brl(c.sobra)+'</span></div>'+
+   '<div class="grp-i"><span>Lucro total ('+pct(c.margem)+')</span><span>'+brl(c.sobra)+'</span></div>'+
    '<div class="grp-t big"><span>Preço</span><span>'+brl(P)+'</span></div></div>';
   var diffN=c.refN-P;var nMsg;
   if(Math.abs(diffN)/P<0.03)nMsg='Chega praticamente no preço calculado.';
   else if(diffN<0)nMsg=brl0(-diffN)+' abaixo do preço calculado. '+(lucroCom(c,c.refN)<0?'Nesse valor a empresa teria prejuízo.':'A margem cairia para '+pct(margemCom(c,c.refN))+'.');
   else nMsg=brl0(diffN)+' acima do preço calculado. A margem subiria para '+pct(margemCom(c,c.refN))+'.';
-  var useBtn=!locked&&c.refN>0&&margemCom(c,c.refN)>0&&Math.abs(diffN)/P>=0.01?'<button class="btn btn-sm" style="background:#fff" data-act="useRefN">Usar '+brl0(c.refN)+' como preço</button>':'';
+  var useBtn=!locked&&!c.porAreas&&c.refN>0&&margemCom(c,c.refN)>0&&Math.abs(diffN)/P>=0.01?'<button class="btn btn-sm" style="background:#fff" data-act="useRefN">Usar '+brl0(c.refN)+' como preço</button>':'';
   $('#rv-cmp').innerHTML='<div class="line"><span>Material total</span><span>'+brl0(c.material)+'</span></div><div class="line"><span>Material × '+dec(c.N)+'</span><span>'+brl0(c.refN)+'</span></div><div class="line"><span>Preço calculado equivale a</span><span>material × '+dec(c.nEq,1)+'</span></div><p>'+esc(nMsg)+'</p>'+(useBtn?'<div style="margin-top:4px">'+useBtn+'</div>':'');
   var conds=d.proposta?d.proposta.condicoes:d.condicoes.map(forma).filter(Boolean).map(function(f){return calcCond(c,f)});
   $('#rv-conds').innerHTML='<div class="card-head"><h3>Condições para o cliente</h3></div><div style="padding:6px 20px 12px">'+paymentComparison(conds)+'</div>';
@@ -1737,13 +1781,15 @@ function live(){
   var d=ui.draft;if(!d)return;refreshReview();var C=S.config;var c=calcQuote(d);
   var laborInfo=$('#labor-info'),labor=c.labor;
   if(laborInfo){
-    laborInfo.innerHTML='<div class="sum-line"><span>Mão de obra direta '+brl(labor.direta)+' · Rateio da oficina '+brl(labor.rateio)+'</span><b>'+brl(labor.total)+'</b></div>'+
+    laborInfo.innerHTML='<div class="sum-line"><span>Mão de obra usada '+brl(labor.direta)+' · Empresa '+brl(labor.rateio)+'</span><b>'+brl(labor.total)+'</b></div>'+
       (labor.erro?'<p class="small muted">'+esc(labor.erro)+'</p>':'');
     $$('[data-labor-total]').forEach(function(el){
       var row=labor.detalhe.find(function(r){return r.index===+el.dataset.laborTotal});
       el.textContent=row?'Custo direto: '+brl(row.valor):'';
     });
   }
+  $$('[data-area-cost]').forEach(function(el){el.textContent=brl(c.custosAreas[el.dataset.areaCost])});
+  $$('[data-area-profit]').forEach(function(el){el.textContent=brl(c.lucroAreas[el.dataset.areaProfit])});
   var payment=$('#ed-price-comparison');
   if(payment)payment.innerHTML=c.valido?paymentComparison(d.condicoes.map(forma).filter(Boolean).map(function(f){return calcCond(c,f)})):'';
   var s=$('#summary');if(s)s.innerHTML=sideHTML(d);
@@ -1752,7 +1798,7 @@ function live(){
   $$('[data-sub="fitas"]').forEach(function(el){var r=d.fitas[+el.dataset.i];var m=r&&C.fitas.find(function(x){return x.id===r.id});el.textContent=m?brl(n(r.qtd)*m.preco):''});
   var it=$('#itens-total');if(it)it.innerHTML=(d.itens||[]).length?'<span>Total de ferragens e insumos</span><b>'+brl(c.itensCusto)+'</b>':'';
   var fh=$('#fita-hint');if(fh){if(!c.chapasFita)fh.textContent='';else{var f0=C.fitas.find(function(x){return x.id===((d.fitas||[])[0]||{}).id})||C.fitas[0];var rm=f0?n(f0.metros)||50:50;var sug=Math.ceil(c.fitaEst/rm);fh.textContent='Estimativa: '+dec(c.fitaEst,0)+' m para '+dec(c.chapasFita,0)+' chapa'+(c.chapasFita===1?'':'s')+' ('+dec(C.fitaPorChapa,0)+' m por chapa). Dá '+sug+' rolo'+(sug===1?'':'s')+' de '+dec(rm,0)+' m.'+(c.fitaRolos&&c.fitaMetros<c.fitaEst?' Os rolos marcados somam '+dec(c.fitaMetros,0)+' m.':'')}}
-  var ch=$('#ch-hint');if(ch)ch.textContent=d.maoModo==='etapas'?'':'Custo da hora: '+brl(c.custoHora);
+  var ch=$('#ch-hint');if(ch)ch.textContent=d.maoModo==='etapas'||d.maoModo==='separado'?'':'Custo da hora: '+brl(c.custoHora);
   var ms=$('#marg-sug');if(ms)ms.textContent=pct(c.margemSug);
   var mb=$('#marg-base');if(mb){var aj=c.ajustes.filter(function(a){return a.w}).map(function(a){return (a.w>0?'+':'−')+Math.abs(a.w)}).join(' ');mb.textContent='Base '+pct(C.margemBase)+(aj?' '+aj:'')+(c.manual?' · usando '+pct(c.margem):'')}
   $$('.conds-pick .chk').forEach(function(el){var inp=el.querySelector('input');var f=forma(inp.dataset.cond);var sp=el.querySelector('.cp');if(!sp){sp=document.createElement('b');sp.className='cp num';el.appendChild(sp)}sp.textContent=c.valido?brl0(calcCond(c,f).preco):''});
@@ -1776,7 +1822,7 @@ function onEditorInput(e){
     if(f==='clienteId'){d.clienteId=t.value||null;var cl=cliente(t.value);d.contato=cl?{nome:cl.nome,telefone:cl.telefone}:{nome:'',telefone:''};rerenderEditor();return}
     var v=t.type==='checkbox'?t.checked:t.type==='number'?(t.value===''?'':n(t.value)):t.value;
     setPath(d,f,v);
-    if(f==='rateioModo'||/^maoLancamentos\.\d+\.pessoa$/.test(f)){rerenderEditor();var control=document.getElementById(t.id);if(control)control.focus();return}
+    if(f==='precoModo'||f==='rateioModo'||/^maoLancamentos\.\d+\.pessoa$/.test(f)){rerenderEditor();var control=document.getElementById(t.id);if(control)control.focus();return}
     if(f==='valorarEntregas'){rerenderEditor();$('#ed-valorarItens').focus();return}
     if(f==='titulo'){var h=$('.page-head h1');if(h)h.textContent=t.value||'Sem título'}
   }else if(t.dataset.row){var r=d[t.dataset.row][+t.dataset.i];r[t.dataset.k]=t.dataset.k==='qtd'?n(t.value):t.value}
@@ -2578,7 +2624,7 @@ var A={
     var rows=d.maoLancamentos||(d.maoLancamentos=[]);
     rows.push({etapa:'Corte',pessoa:'dono',horas:'',valorHora:''});
     rerenderEditor();autoSaveDraft();
-    var first=$('#mao-'+(rows.length-1)+'-etapa');if(first)first.focus();
+    var first=$('#mao-'+(rows.length-1)+(d.maoModo==='separado'?'-pessoa':'-etapa'));if(first)first.focus();
   },
   laborDel:function(b){
     var d=ui.draft;if(readOnly||!d||d.status!=='rascunho'||!d.maoLancamentos)return;
@@ -2588,7 +2634,7 @@ var A={
   dPer:function(b){ui.dPer=b.dataset.p;render()},
   dShift:function(b){var k=+b.dataset.d;ui.dRef=(ui.dPer==='mes'?addMonths(ui.dRef+'-01',k):addMonths(ui.dRef+'-01',12*k)).slice(0,7);render()},
   qFilterGo:function(b){ui.qFilter=b.dataset.f;ui.quoteId=null;ui.draft=null},
-  step:function(b){var d=ui.draft;ui.step=+b.dataset.s;ui.autoHoras=false;if(ui.step===2&&d.status==='rascunho'&&d.maoModo!=='etapas'&&(!d.mobcloud||d.mobcloud.estimarHoras)&&!n(d.horasOficina)&&!n(d.horasInstalacao)){var h=sugHoras(d);if(h.of){d.horasOficina=h.of;d.horasInstalacao=h.inst;ui.autoHoras=true}}$('#main').innerHTML=vEditor();live();if(ui.autoHoras)autoSaveDraft();var st=$('.stepper');if(st)window.scrollTo(0,Math.max(0,st.getBoundingClientRect().top+window.scrollY-20))},
+  step:function(b){var d=ui.draft;ui.step=+b.dataset.s;ui.autoHoras=false;if(ui.step===2&&d.status==='rascunho'&&d.maoModo!=='etapas'&&d.maoModo!=='separado'&&(!d.mobcloud||d.mobcloud.estimarHoras)&&!n(d.horasOficina)&&!n(d.horasInstalacao)){var h=sugHoras(d);if(h.of){d.horasOficina=h.of;d.horasInstalacao=h.inst;ui.autoHoras=true}}$('#main').innerHTML=vEditor();live();if(ui.autoHoras)autoSaveDraft();var st=$('.stepper');if(st)window.scrollTo(0,Math.max(0,st.getBoundingClientRect().top+window.scrollY-20))},
   sendQuote:sendQuote,
   showProposal:function(b){var q=b.dataset.id?quote(b.dataset.id):ui.draft;closeModal();showProposal(q)},
   printProposal:function(){try{window.print()}catch(e){toast('A impressão não abriu aqui. Abra o sistema direto no navegador para imprimir.')}},
