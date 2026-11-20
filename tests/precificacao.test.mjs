@@ -3,107 +3,81 @@ import assert from 'node:assert/strict';
 import { app } from './support/app.mjs';
 
 function setup() {
-  const { api } = app();
-  const state = api.getState();
+  const { api } = app(), state = api.getState();
   state.config.custosFixos = [{ id: 'aluguel', valor: 2200 }];
-  state.config.diasFuncionamento = 22;
-  state.config.horasDono = 0;
-  state.config.produtividade = 100;
-  state.config.encargos = 0;
-  state.config.imposto = 0;
+  Object.assign(state.config, { horasDono: 0, produtividade: 100, encargos: 0, imposto: 0 });
   state.equipe = [{ id: 'pessoa', nome: 'Montador', status: 'Ativo', vinculo: 'CLT', valor: 3200, horasSemana: 160 / 4.33 }];
   const q = api.newDraft();
   Object.assign(q, { chapas: [], fitas: [], itens: [], outros: 1000, reservaPct: 0,
-    maoLancamentos: [{ etapa: 'Montagem', pessoa: 'pessoa', horas: 40 }],
-    diasOficina: 5, ocupacaoPct: 100, lucros: { material: 100, maoObra: 50, empresa: 20 } });
+    horasOficina: 40, horasInstalacao: 0, precoModo: 'areas', lucros: { material: 100, maoObra: 50, empresa: 20 } });
   return { api, state, q };
 }
 
-test('separa salários das despesas diárias sem contar a folha duas vezes', () => {
-  const { api, q } = setup();
-  const c = api.calcQuote(q);
+test('mantém o custo por hora anterior e aplica lucros diferentes somente no ajuste final', () => {
+  const { api, q } = setup(), c = api.calcQuote(q);
   assert.equal(c.valido, true);
   assert.equal(c.custosAreas.material, 1000);
   assert.equal(c.custosAreas.maoObra, 800);
-  assert.equal(c.labor.empresaDia, 100);
-  assert.equal(c.custosAreas.empresa, 500);
-  assert.equal(c.custo, 2300);
-  assert.equal(c.lucroAreas.material, 1000);
-  assert.equal(c.lucroAreas.maoObra, 400);
-  assert.equal(c.lucroAreas.empresa, 100);
-  assert.equal(c.preco, 3800);
-  assert.equal(c.sobra, 1500);
+  assert.equal(c.custosAreas.empresa, 550);
+  assert.equal(c.custo, 2350);
+  assert.equal(c.lucroAlvo, 1510);
+  assert.equal(c.preco, 3860);
 });
 
-test('permite 0 e 100 por área e rejeita campos ausentes ou fora do intervalo', () => {
+test('permite zero e cem e rejeita percentuais ausentes ou fora do intervalo', () => {
   const { api, q } = setup();
   q.lucros = { material: 100, maoObra: 100, empresa: 100 };
-  assert.equal(api.calcQuote(q).preco, 4600);
+  assert.equal(api.calcQuote(q).preco, 4700);
   q.lucros = { material: 0, maoObra: 0, empresa: 0 };
-  assert.equal(api.calcQuote(q).preco, 2300);
-  for (const value of ['', -1, 101, 'inválido']) {
-    q.lucros.material = value;
-    assert.equal(api.calcQuote(q).valido, false);
-  }
+  assert.equal(api.calcQuote(q).preco, 2350);
+  for (const value of ['', -1, 101, 'inválido']) { q.lucros.material = value; assert.equal(api.calcQuote(q).valido, false); }
 });
 
-test('taxas preservam o lucro em reais e descontos reduzem a sobra explicitamente', () => {
+test('taxas preservam lucro em reais e descontos reduzem a sobra', () => {
   const { api, state, q } = setup();
-  state.config.imposto = 10;
-  q.rtPct = 5;
-  const c = api.calcQuote(q);
-  assert.ok(Math.abs(c.preco - 3800 / 0.85) < 0.00001);
-  const f = { id: 'cartao', taxa: 5, desconto: 0 };
+  state.config.imposto = 10; q.rtPct = 5;
+  const c = api.calcQuote(q), f = { id: 'cartao', taxa: 5, desconto: 0 };
+  assert.ok(Math.abs(c.preco - 3860 / 0.85) < 0.00001);
   const paid = api.calcCond(c, f);
-  assert.equal(paid.preco, 4750);
-  assert.ok(Math.abs(paid.sobra - 1500) < 0.00001);
+  assert.equal(paid.preco, 4825);
+  assert.ok(Math.abs(paid.sobra - 1510) < 0.00001);
   q.descontos = { cartao: 10 };
   const discounted = api.calcCond(api.calcQuote(q), f);
-  assert.equal(discounted.preco, 4275);
-  assert.ok(Math.abs(discounted.sobra - 1120) < 0.00001);
+  assert.equal(discounted.preco, 4342.5);
+  assert.ok(Math.abs(discounted.sobra - 1124) < 0.00001);
 });
 
-test('projetos paralelos podem compartilhar a diária da empresa', () => {
+test('novos orçamentos e telas anteriores permanecem no fluxo original', () => {
+  const { api, q } = setup(), fresh = api.newDraft();
+  assert.equal(fresh.maoModo, undefined);
+  assert.equal(fresh.precoModo, undefined);
+  delete q.precoModo; q.margemManual = 25;
+  assert.equal(api.calcQuote(q).preco, 2350 / 0.75);
+  api.ui.draft = q; api.ui.step = 2;
+  const labor = api.vEditor();
+  assert.match(labor, /Estimativa rápida/);
+  assert.doesNotMatch(labor, /Mão de obra \+ empresa por dia/);
+  api.ui.step = 3;
+  assert.match(api.vEditor(), /Margem sugerida/);
+  assert.doesNotMatch(api.vEditor(), /Lucro sobre cada custo/);
+  assert.match(api.reviewHTML(q), /Ajustar lucro por categoria/);
+});
+
+test('rascunhos do modo removido voltam às horas rápidas sem alterar propostas enviadas', () => {
   const { api, q } = setup();
-  q.ocupacaoPct = 50;
-  assert.equal(api.calcQuote(q).custosAreas.empresa, 250);
-  q.ocupacaoPct = 101;
-  assert.equal(api.calcQuote(q).valido, false);
-  q.ocupacaoPct = 100;
-  q.diasOficina = 0;
-  assert.equal(api.calcQuote(q).valido, false);
+  Object.assign(q, { maoModo: 'separado', maoLancamentos: [{ etapa: 'Corte', horas: 24 }, { etapa: 'Instalação', horas: 8 }] });
+  api.restoreDraftLabor(q);
+  assert.equal(q.maoModo, 'rapido');
+  assert.equal(q.horasOficina, 24);
+  assert.equal(q.horasInstalacao, 8);
+  const sent = { status: 'enviado', maoModo: 'separado', proposta: { calc: { preco: 9999 } } };
+  api.restoreDraftLabor(sent);
+  assert.equal(sent.maoModo, 'separado');
+  assert.equal(sent.proposta.calc.preco, 9999);
 });
 
-test('salários administrativos ficam na diária e pró-labore vinculado fica na mão de obra', () => {
-  const { api, state, q } = setup();
-  state.equipe.push({ id: 'admin', status: 'Ativo', vinculo: 'CLT', valor: 1100, horasSemana: 0 });
-  assert.equal(api.calcQuote(q).labor.empresaDia, 150);
-  state.config.custosFixos.push({ id: 'dono', valor: 2400 });
-  state.config.proLaboreId = 'dono';
-  state.config.horasDono = 120;
-  q.maoLancamentos.push({ etapa: 'Montagem', pessoa: 'dono', horas: 10 });
-  const c = api.calcQuote(q);
-  assert.equal(c.labor.empresaDia, 150);
-  assert.equal(c.custosAreas.maoObra, 1000);
-});
-
-test('orçamento anterior mantém o cálculo por margem global', () => {
-  const { api, q } = setup();
-  delete q.precoModo;
-  q.maoModo = 'rapido';
-  q.horasOficina = 40;
-  q.horasInstalacao = 0;
-  q.margemManual = 25;
-  const c = api.calcQuote(q);
-  assert.equal(c.porAreas, false);
-  const cost = 1000 + 40 * (2200 + 3200) / 160;
-  assert.equal(c.custo, cost);
-  assert.equal(c.preco, cost / 0.75);
-});
-
-test('atualização ao editar os percentuais funciona mesmo fora da tabela de lucro', () => {
-  const { api, q } = setup();
-  api.ui.draft = q;
+test('atualizar os percentuais não interrompe o editor', () => {
+  const { api, q } = setup(); api.ui.draft = q;
   assert.doesNotThrow(() => api.live());
   q.lucros.empresa = 100;
   assert.doesNotThrow(() => api.live());

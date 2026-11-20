@@ -15,7 +15,7 @@ export function app() {
     S=seed();
     openModal=function(spec){window.modal=spec};
     window.api={pieceTable,materialTable,projectMaterials,estimateMaterialSheets,reviewProjectImport,
-      oficina,calcQuote,calcCond,quoteLabor,laborResources,newDraft,reviewHTML,sideHTML,vEditor,live,ui,
+      oficina,calcQuote,calcCond,quoteLabor,laborResources,newDraft,reviewHTML,sideHTML,vEditor,live,ui,restoreDraftLabor,profitDefaults,ensureFixedBills,fixedBillDate,cxReserve,cxMonthly,cxMonthCard,dGeral,dPagar,CX,mesAtual,
       getState:function(){return S},setState:function(state){S=state}};
   })();`, context);
   return { api: context.window.api, window: context.window };

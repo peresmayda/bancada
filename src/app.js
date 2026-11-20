@@ -120,6 +120,7 @@ function defFitas(){return [
 function chapasComFita(q){var C=S.config,k=0;(q.chapas||[]).forEach(function(r){var m=C.chapas.find(function(x){return x.id===r.id});if(m&&!m.semFita)k+=n(r.qtd)});return k}
 /* converte orçamentos antigos (kits fechados e fita por metro) para itens soltos e rolos */
 function normQ(q){
+  restoreDraftLabor(q);
   if(!q||(q.itens&&q.fitas))return q;var C=S.config;
   if(!q.itens){var it=[];(q.kits||[]).forEach(function(r){var k=(C.kits||[]).find(function(x){return x.id===r.id});if(!k||!k.itens)return;k.itens.forEach(function(i){var t=n(i.qtd)*n(r.qtd);if(!t)return;var ex=it.find(function(x){return x.id===i.id});if(ex)ex.qtd+=t;else it.push({id:i.id,qtd:t})})});q.itens=it}
   if(!q.fitas){var m=isAuto(q.fitaMetros)?chapasComFita(q)*n(C.fitaPorChapa):n(q.fitaMetros);var f=C.fitas.find(function(x){return x.id===q.fitaId})||C.fitas[0];q.fitas=f&&m>0?[{id:f.id,qtd:Math.max(1,Math.ceil(m/(n(f.metros)||50)))}]:[]}
@@ -410,7 +411,7 @@ function laborResources(C,of){
   return {people:people,hour:of.horas>0?indirect/of.horas:null,day:days>0?indirect/days:null};
 }
 function quoteLabor(q,C,of){
-  if(q.maoModo!=='etapas'&&q.maoModo!=='separado'){
+  if(q.maoModo!=='etapas'){
     var workshop=n(q.horasOficina),install=n(q.horasInstalacao);
     return {oficina:workshop,instalacao:install,horas:workshop+install,total:(workshop+install)*of.custoHora,hora:of.custoHora};
   }
@@ -427,25 +428,31 @@ function quoteLabor(q,C,of){
     if(row.etapa==='Instalação')install+=hours;else workshop+=hours;
     direct+=amount;rows.push({index:index,etapa:row.etapa,nome:manual?'Valor manual':p.nome,horas:hours,valor:amount});
   });
-  var hours=workshop+install,byDay=q.maoModo==='separado'||q.rateioModo==='dias',days=n(q.diasOficina);
-  var occupation=q.maoModo==='separado'?(isAuto(q.ocupacaoPct)?100:n(q.ocupacaoPct)):100;
-  if(!error&&(!Number.isFinite(occupation)||occupation<=0||occupation>100))error='Informe a parcela de uso da empresa, maior que zero e até 100%.';
+  var hours=workshop+install,byDay=q.rateioModo==='dias',days=n(q.diasOficina);
   var fee=byDay?resources.day:resources.hour;
   if(!error&&!hours)error='Em Mão de obra, lance ao menos uma etapa com horas produtivas.';
   if(!error&&(fee==null||byDay&&days<=0)){
     error=byDay?'Em Mão de obra, informe os dias de ocupação e confira os dias de funcionamento em Ajustes.':'Em Ajustes, informe a capacidade de horas produtivas da oficina.';
   }
-  var overhead=fee==null?0:(byDay?days:hours)*fee*occupation/100,total=direct+overhead;
+  var overhead=fee==null?0:(byDay?days:hours)*fee,total=direct+overhead;
   return {oficina:workshop,instalacao:install,horas:hours,total:total,hora:hours?total/hours:0,
-    detalhe:rows,direta:direct,rateio:overhead,empresaDia:resources.day,diasEmpresa:days,ocupacao:occupation,rateioModo:byDay?'dias':'horas',erro:error};
+    detalhe:rows,direta:direct,rateio:overhead,rateioModo:byDay?'dias':'horas',erro:error};
 }
 function quoteCostAreas(material,labor,of){
   var direct=labor.direta,company=labor.rateio;
-  if(direct==null){
-    direct=of.total>0?labor.total*of.folha/of.total:0;
-    company=labor.total-direct;
-  }
+  if(direct==null){direct=of.total>0?labor.total*of.folha/of.total:0;company=labor.total-direct}
   return {material:material,maoObra:direct,empresa:company};
+}
+function profitDefaults(c){
+  var rate=c.custo>0?Math.max(0,Math.min(100,c.sobra/c.custo*100)):0;
+  rate=Math.round(rate*100)/100;
+  return {material:rate,maoObra:rate,empresa:rate};
+}
+function restoreDraftLabor(q){
+  if(!q||q.status!=='rascunho'||q.maoModo!=='separado')return;
+  var rows=q.maoLancamentos||[];
+  if(rows.length){q.horasOficina=0;q.horasInstalacao=0;rows.forEach(function(r){q[r.etapa==='Instalação'?'horasInstalacao':'horasOficina']+=n(r.horas)})}
+  q.maoModo='rapido';
 }
 function sugHoras(d){var C=S.config;var ch=(d.chapas||[]).reduce(function(a,r){return a+n(r.qtd)},0);var of=Math.round(ch*n(C.horasPorChapa));return {ch:ch,of:of,inst:Math.round(of*n(C.instalacaoPct)/100)}}
 function mediaReal(){var h=0,ch=0;S.obras.forEach(function(o){var r=o.realizado||{};if(!r.fechado||!n(r.horas))return;var q=quote(o.quoteId);if(!q)return;var c=(q.chapas||[]).reduce(function(a,x){return a+n(x.qtd)},0);if(!c)return;h+=n(r.horas)/(1+n(S.config.instalacaoPct)/100);ch+=c});return ch?{hpc:h/ch,obras:ch}:null}
@@ -710,6 +717,7 @@ function val(id){var e=document.getElementById(id);return e?e.value:''}
 
 function render(){
   if(cloudEnabled&&!S)return;
+  if(ensureFixedBills([ui.cxMonth,ui.dRef].filter(Boolean).sort().pop()))persistState();
   var app=$('#app');
   var h=location.hash.replace('#','');
   var views=NAV.map(function(x){return x[0]});
@@ -1551,7 +1559,6 @@ function newDraft(clienteId){
   var C=S.config;var cl=clienteId&&cliente(clienteId);
   return {id:uid(),numero:null,clienteId:cl?cl.id:null,contato:{nome:cl?cl.nome:'',telefone:cl?cl.telefone:''},titulo:'',status:'rascunho',criadoEm:today(),enviadoEm:null,
     chapas:[{id:C.chapas[0]?C.chapas[0].id:'',qtd:1}],fitas:C.fitas[0]?[{id:C.fitas[0].id,qtd:1}]:[],itens:[],outros:0,horasOficina:0,horasInstalacao:0,pessoas:C.pessoasProjeto||2,terceiros:0,frete:0,
-    maoModo:'separado',maoLancamentos:[],diasOficina:'',ocupacaoPct:100,precoModo:'areas',lucros:{material:'',maoObra:'',empresa:''},
     reservaPct:C.reserva,rtNome:'',rtPct:0,respostas:{},margemManual:'',entradaPct:30,entradaParcelas:5,condicoes:(function(){var w=['pix','entrada','cred10'].filter(function(id){return forma(id)});return w.length?w:C.formas.slice(0,3).map(function(f){return f.id})})(),validade:C.validade,obs:'',motivoPerda:'',retomarEm:'',precoSalvo:0};
 }
 function proposalItemsForm(d){
@@ -1595,27 +1602,10 @@ function laborForm(d){
     (d.rateioModo==='dias'?'<div class="field"><label for="ed-diasOficina">Dias que o projeto ocupa a oficina</label>'+numIn('diasOficina',d.diasOficina,' min="0"')+'</div><p class="muted small">Use quando o projeto bloquear a capacidade da oficina nesses dias.</p>':'')+
     '<div id="labor-info"></div>';
 }
-function separatedLaborForm(d){
-  var C=S.config,resources=laborResources(C,oficina());
-  var rows=(d.maoLancamentos||[]).map(function(row,i){
-    var people=resources.people.map(function(person){return [person.id,person.nome+' · '+(person.hour==null?'configure o custo':person.inOverhead?'pró-labore na empresa':brl(person.hour)+'/h')]});
-    if(row.pessoa&&row.pessoa!=='manual'&&!people.some(function(person){return person[0]===row.pessoa}))people.push([row.pessoa,'Pessoa indisponível — substitua']);
-    people.push(['manual','Informar custo por hora']);
-    return '<fieldset class="field scope-item"><legend>Pessoa '+(i+1)+'</legend><div class="fgrid"><div class="field"><label for="mao-'+i+'-pessoa">Quem trabalha no projeto</label><select class="in" id="mao-'+i+'-pessoa" data-f="maoLancamentos.'+i+'.pessoa">'+people.map(function(person){return '<option value="'+esc(person[0])+'"'+(person[0]===row.pessoa?' selected':'')+'>'+esc(person[1])+'</option>'}).join('')+'</select></div>'+
-      '<div class="field"><label for="mao-'+i+'-horas">Horas usadas no projeto</label><input class="in r" id="mao-'+i+'-horas" type="number" min="0" step="any" data-f="maoLancamentos.'+i+'.horas" value="'+esc(row.horas)+'"></div>'+
-      (row.pessoa==='manual'?'<div class="field"><label for="mao-'+i+'-valor">Custo da mão de obra por hora (R$)</label><input class="in r" id="mao-'+i+'-valor" type="number" min="0" step="any" data-f="maoLancamentos.'+i+'.valorHora" value="'+esc(row.valorHora)+'"></div>':'')+'</div><div class="actions"><button class="btn btn-sm" data-act="laborDel" data-i="'+i+'">Remover pessoa</button><span class="muted small" data-labor-total="'+i+'"></span></div></fieldset>';
-  }).join('');
-  return '<p class="muted small">Registre as horas de cada pessoa usada no projeto. Os salários vêm da equipe, com encargos e aproveitamento. Um custo manual deve conter só a mão de obra, sem as despesas da empresa.</p>'+rows+
-    '<button class="btn btn-sm" data-act="laborAdd">+ Adicionar pessoa</button><div class="sec"><h2>Custo da empresa por dia</h2><p>Diária da empresa: <b>'+brl(resources.day)+'</b></p>'+
-    '<p class="muted small">Despesas mensais da empresa ÷ dias de funcionamento. Os salários já tratados na mão de obra ficam fora desta diária. Pró-labore sem vínculo com a mão de obra permanece nas despesas da empresa.</p><div class="fgrid"><div class="field"><label for="ed-diasOficina">Dias de execução do projeto</label>'+numIn('diasOficina',d.diasOficina,' min="0"')+'</div><div class="field"><label for="ed-ocupacaoPct">Parcela de uso da empresa (%)</label>'+numIn('ocupacaoPct',isAuto(d.ocupacaoPct)?100:d.ocupacaoPct,' min="0" max="100"')+'</div></div><p class="muted small">Use 100% quando o projeto ocupar a empresa nesses dias. Se houver projetos em paralelo, distribua a diária entre eles para não cobrar os mesmos custos duas vezes.</p></div><div id="labor-info"></div>';
-}
 function areaProfitForm(d){
   var c=calcQuote(d),labels={material:'Material',maoObra:'Mão de obra',empresa:'Empresa'};
   return '<div class="sec"><h2>Lucro sobre cada custo</h2><p class="muted small">De 0% a 100% sobre o custo de cada área. Um acréscimo de 100% dobra aquele custo; não é uma margem de 100% sobre o preço de venda. Terceiros e frete entram pelo custo, sem acréscimo.</p><div class="scroll"><table class="tbl"><thead><tr><th>Área</th><th class="r">Custo</th><th>Lucro sobre o custo (%)</th><th class="r">Lucro em reais</th></tr></thead><tbody>'+
     ['material','maoObra','empresa'].map(function(key){return '<tr><td>'+labels[key]+'</td><td class="r" data-area-cost="'+key+'">'+brl(c.custosAreas[key])+'</td><td><input class="in r" type="number" min="0" max="100" step="0.5" data-f="lucros.'+key+'" id="ed-lucro-'+key+'" aria-label="Lucro sobre '+labels[key].toLowerCase()+' (%)" value="'+esc((d.lucros||{})[key])+'"></td><td class="r" data-area-profit="'+key+'">'+brl(c.lucroAreas[key])+'</td></tr>'}).join('')+'</tbody></table></div><p class="muted small">Impostos e comissão são calculados por fora desses custos e lucros. Na etapa Pagamento, taxas e descontos mostram o lucro que efetivamente sobra.</p></div>';
-}
-function profitModeForm(d){
-  return '<div class="sec"><label for="ed-precoModo">Como calcular o lucro</label><select class="in" id="ed-precoModo" data-f="precoModo"><option value="areas"'+(d.precoModo==='areas'?' selected':'')+'>Lucro por material, mão de obra e empresa</option><option value="margem"'+(d.precoModo!=='areas'?' selected':'')+'>Margem global (cálculo anterior)</option></select></div>';
 }
 function diasRound(h){var v=n(h)/horasDia();return h===''||h==null?'':String(Math.round(v*100)/100)}
 function diasIn(f,h){return '<input class="in r" type="number" step="any" min="0" inputmode="decimal" data-dias="'+f+'" id="ed-dias-'+f+'" value="'+esc(diasRound(h))+'">'}
@@ -1649,7 +1639,7 @@ function vEditor(){
     '<div class="sum-line" id="itens-total"></div></div>'+
     '<div class="sec"><div class="fgrid"><div class="field"><label for="ed-outros">Outros materiais (R$)</label>'+numIn('outros',d.outros)+'</div><div class="field"><label for="ed-reservaPct">Reserva para perdas (%)</label>'+numIn('reservaPct',d.reservaPct)+'</div></div></div>';
   }else if(st===2){
-    var detailed=d.maoModo==='etapas',separated=d.maoModo==='separado';
+    var detailed=d.maoModo==='etapas';
     var quick='<div class="sugg" id="sugg"></div><div class="fgrid">'+
     '<div class="field"><label for="ed-horasOficina">Horas na oficina</label>'+numIn('horasOficina',d.horasOficina)+'</div>'+
     '<div class="field"><label for="ed-dias-horasOficina">ou dias na oficina</label>'+diasIn('horasOficina',d.horasOficina)+'</div>'+
@@ -1657,8 +1647,8 @@ function vEditor(){
     '<div class="field"><label for="ed-dias-horasInstalacao">ou dias de instalação</label>'+diasIn('horasInstalacao',d.horasInstalacao)+'</div></div>'+
     '<p class="small muted">Horas e dias se convertem sozinhos. Um dia equivale a '+dec(horasDia(),0)+' h de uma pessoa.</p>';
     sec='<div class="sec"><div class="sec-h"><h2>Horas de trabalho</h2><span class="muted" id="ch-hint"></span></div>'+
-    '<div class="seg" style="margin-bottom:12px"><button class="'+(separated?'on':'')+'" data-act="laborMode" data-mode="separado" aria-pressed="'+separated+'">Mão de obra + empresa por dia</button><button class="'+(!detailed&&!separated?'on':'')+'" data-act="laborMode" data-mode="rapido" aria-pressed="'+(!detailed&&!separated)+'">Estimativa rápida (anterior)</button><button class="'+(detailed?'on':'')+'" data-act="laborMode" data-mode="etapas" aria-pressed="'+detailed+'">Por etapa e profissional</button></div>'+
-    (separated?separatedLaborForm(d):detailed?laborForm(d):quick)+
+    '<div class="seg" style="margin-bottom:12px"><button class="'+(!detailed?'on':'')+'" data-act="laborMode" data-mode="rapido" aria-pressed="'+!detailed+'">Estimativa rápida</button><button class="'+(detailed?'on':'')+'" data-act="laborMode" data-mode="etapas" aria-pressed="'+detailed+'">Por etapa e profissional</button></div>'+
+    (detailed?laborForm(d):quick)+
     '<div class="fgrid"><div class="field"><label for="ed-pessoas">Pessoas trabalhando no projeto</label>'+numIn('pessoas',isAuto(d.pessoas)?pessoasDe(d):d.pessoas,' min="1" step="1"')+'</div></div>'+
     '<p class="small muted" id="dias-info"></p></div>'+
     '<div class="sec"><h2>Terceiros e frete</h2><div class="fgrid">'+
@@ -1667,8 +1657,8 @@ function vEditor(){
     '<div class="sec"><div class="sec-h"><h2>Comissão de arquiteto</h2><span class="muted">Deixe zerado se não houver</span></div><div class="fgrid"><div class="field"><label for="ed-rtNome">Nome</label><input class="in" id="ed-rtNome" data-f="rtNome" value="'+esc(d.rtNome)+'"></div><div class="field"><label for="ed-rtPct">RT (%)</label>'+numIn('rtPct',d.rtPct)+'</div></div></div>';
   }else if(st===3){
     var qs=Q.map(function(qq){var cur=(d.respostas||{})[qq.id]||0;return '<div class="q"><span class="qt">'+esc(qq.t)+'</span><div class="qopts" role="radiogroup" aria-label="'+esc(qq.t)+'">'+qq.o.map(function(o,i){var w=(C.pesos[qq.id]||[])[i]||0;return '<label class="qopt"><input type="radio" name="q-'+qq.id+'" data-q="'+qq.id+'" value="'+i+'"'+(cur===i?' checked':'')+'><span>'+esc(o)+(w?' <em>'+(w>0?'+':'−')+Math.abs(w)+'%</em>':'')+'</span></label>'}).join('')+'</div></div>'}).join('');
-    sec=profitModeForm(d)+(d.precoModo==='areas'?areaProfitForm(d):'<div class="sec"><div class="sec-h"><h2>Quanto vale este projeto</h2><span class="muted">Ajusta a margem pelo que não está na lista de material</span></div>'+qs+
-    '<div class="marg"><div><span class="lbl">Margem sugerida</span><div class="big" id="marg-sug"></div><span class="muted small" id="marg-base"></span></div><div class="field" style="width:170px"><label for="ed-margemManual">Usar outra margem (%)</label>'+numIn('margemManual',d.margemManual,' placeholder="automática"')+'</div></div></div>');
+    sec='<div class="sec"><div class="sec-h"><h2>Quanto vale este projeto</h2><span class="muted">Ajusta a margem pelo que não está na lista de material</span></div>'+qs+
+    '<div class="marg"><div><span class="lbl">Margem sugerida</span><div class="big" id="marg-sug"></div><span class="muted small" id="marg-base"></span></div><div class="field" style="width:170px"><label for="ed-margemManual">Usar outra margem (%)</label>'+numIn('margemManual',d.margemManual,' placeholder="automática"')+'</div></div></div>';
   }else if(st===4){
     var conds=C.formas.map(function(f){var on=d.condicoes.indexOf(f.id)>=0;return '<label class="chk"><input type="checkbox" data-cond="'+f.id+'"'+(on?' checked':'')+'> '+esc(f.nome)+(n(f.taxa)?' <span class="muted small">taxa '+pct(f.taxa)+'</span>':'')+(hasDesc(f)||descOf(d,f)?' <span class="muted small" data-dl="'+f.id+'">'+(descOf(d,f)?'desconto '+pct(descOf(d,f)):'')+'</span>':'')+'</label>'+(hasDesc(f)&&on?'<div class="entrada-box"><div class="field"><label for="ed-descontos-'+f.id+'">Desconto (%)</label>'+numIn('descontos.'+f.id,descOf(d,f))+'</div><p data-descp="'+f.id+'"></p></div>':'')+(f.tipo==='entrada'&&on?'<div class="entrada-box"><div class="field"><label for="ed-entradaPct">Entrada (%)</label>'+numIn('entradaPct',isAuto(d.entradaPct)?30:d.entradaPct)+'</div><div class="field"><label for="ed-entradaParcelas">Restante em</label>'+numIn('entradaParcelas',isAuto(d.entradaParcelas)?5:d.entradaParcelas)+'</div><p id="entrada-desc"></p></div>':'')}).join('');
     sec='<div class="sec"><div class="sec-h"><h2>Formas de pagamento oferecidas</h2></div><div class="conds-pick">'+conds+'</div><div id="entrada-cx"></div><div id="ed-price-comparison"></div></div>'+
@@ -1685,10 +1675,10 @@ function vEditor(){
 }
 function sideHTML(d){
   var c=calcQuote(d),C=S.config;
-  if(c.erro)return '<div class="card"><div class="brk"><p class="alert warn">'+esc(c.erro)+'</p><div><span>Material</span><b>'+brl(c.material)+'</b></div><div><span>Mão de obra usada</span><b>'+brl(c.custosAreas.maoObra)+'</b></div><div><span>Empresa</span><b>'+brl(c.custosAreas.empresa)+'</b></div></div></div>';
+  if(c.erro)return '<div class="card"><div class="brk"><p class="alert warn">'+esc(c.erro)+'</p></div></div>';
   if(!c.valido)return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div></div><div class="brk"><div class="alert warn">'+(c.custo>0?'Imposto, comissão e margem passaram do limite. Reduza a margem.':'Preencha materiais e horas para ver o preço.')+'</div></div></div>';
-  return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div><div class="hl"><span class="k">Preço</span><span class="big">'+brl0(c.preco)+'</span></div><div><span class="k">Lucro total</span><span class="big" style="color:var(--ok)">'+brl0(c.sobra)+'</span></div></div>'+
-  '<div class="brk"><div><span>Material</span><span>'+brl0(c.material)+'</span></div><div><span>Mão de obra usada</span><span>'+brl0(c.custosAreas.maoObra)+'</span></div><div><span>Empresa</span><span>'+brl0(c.custosAreas.empresa)+'</span></div><div><span>Terceiros e frete</span><span>'+brl0(c.terceiros+c.frete)+'</span></div><div><span>Margem</span><span>'+pct(c.margem)+'</span></div>'+
+  return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div><div class="hl"><span class="k">Preço</span><span class="big">'+brl0(c.preco)+'</span></div><div><span class="k">Lucro da empresa</span><span class="big" style="color:var(--ok)">'+brl0(c.sobra)+'</span></div></div>'+
+  '<div class="brk"><div><span>Material</span><span>'+brl0(c.material)+'</span></div><div><span>Mão de obra</span><span>'+brl0(c.maoObra)+'</span></div><div><span>Terceiros e frete</span><span>'+brl0(c.terceiros+c.frete)+'</span></div><div><span>Margem</span><span>'+pct(c.margem)+'</span></div>'+
   '<div style="color:var(--brown)"><span>Material × N</span><span>× '+dec(c.nEq,1)+' <span class="muted">(ref. × '+dec(c.N)+')</span></span></div>'+
   (c.margem<n(C.margemMinima)?'<div class="alert bad">Margem abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+'</div></div>';
 }
@@ -1709,7 +1699,7 @@ function reviewHTML(d){
    '<div class="card ctrl"><div class="ctrl-h"><div><h3>Margem de lucro</h3><span class="muted small">Sugerida pelo questionário: '+pct(c.margemSug)+' · <button class="linkbtn" data-act="margSug">voltar para a sugerida</button></span></div>'+
    '<div class="rng-val"><input class="in r" type="number" step="0.5" id="rv-margem-n" data-rv="margem" value="'+Math.round(c.margem*10)/10+'" aria-label="Margem de lucro em porcentagem"><span>%</span></div></div>'+
    '<input type="range" min="0" max="60" step="0.5" id="rv-margem" data-rv="margem" value="'+c.margem+'" aria-label="Margem de lucro" class="range"><div class="range-scale"><span>0%</span><span>15%</span><span>30%</span><span>45%</span><span>60%</span></div></div>';
-  if(!locked&&d.precoModo==='areas')ctrl='<div class="card">'+areaProfitForm(d)+'</div>';
+  if(!locked)ctrl='<div class="card">'+(d.precoModo==='areas'?areaProfitForm(d)+'<div class="sec"><button class="btn btn-sm" data-act="profitGlobal">Voltar à margem da etapa Valor</button></div>':'<div class="sec"><h2>Ajuste final de lucro</h2><p class="muted small">O preço mantém a margem definida na etapa Valor. Aqui você pode trocar por lucros independentes sobre material, mão de obra e empresa, de 0% a 100% sobre cada custo.</p><button class="btn btn-primary" data-act="profitAreas">Ajustar lucro por categoria</button></div>')+'</div>';
   var cmpHead='<div class="cmp-h"><h3>Comparação com material ×</h3>'+(locked?'<b>'+dec(c.N)+'</b>':'<input class="in r" type="number" step="0.1" min="0" id="rv-mult" data-rv="multN" value="'+c.N+'" aria-label="Multiplicador do material">')+'</div><p class="small" style="margin:-2px 0 6px">Padrão da oficina: × '+dec(C.multN)+'</p>';
   var form=locked?'':'<div class="card proposal-edit" id="proposal-fields"><div class="sec"><h2>Proposta para o cliente</h2>'+
     '<div class="field"><label for="ed-descricao">Descrição do serviço</label><textarea class="in" id="ed-descricao" data-f="descricao" required placeholder="Descreva o que será entregue, os ambientes, materiais e acabamentos.">'+esc(d.descricao||'')+'</textarea></div></div>'+
@@ -1740,18 +1730,18 @@ function refreshReview(){
   }
   $('#rv-top').innerHTML=(!d.proposta&&c.referenciasMdf&&c.referenciasMdf.length?'<div class="alert warn" style="margin-bottom:18px">Este orçamento usa preços de referência para '+esc(c.referenciasMdf.join(', '))+'. Confira o preço e o frete com seu fornecedor antes de enviar.</div>':'')+
     (c.margem<n(C.margemMinima)?'<div class="alert bad" style="margin-bottom:18px">A margem está abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+
-   '<div class="tiles"><div class="tile"><span class="k">Custo total</span><span class="v">'+brl0(c.custo)+'</span></div><div class="tile blue"><span class="k">Preço</span><span class="v">'+brl0(P)+'</span><span class="s">sem taxas de pagamento</span></div><div class="tile"><span class="k">Lucro total</span><span class="v" style="color:var(--ok)">'+brl0(c.sobra)+'</span><span class="s">margem de '+pct(c.margem)+'</span></div></div>';
+   '<div class="tiles"><div class="tile"><span class="k">Custo total</span><span class="v">'+brl0(c.custo)+'</span></div><div class="tile blue"><span class="k">Preço</span><span class="v">'+brl0(P)+'</span><span class="s">sem taxas de pagamento</span></div><div class="tile"><span class="k">Lucro da empresa</span><span class="v" style="color:var(--ok)">'+brl0(c.sobra)+'</span><span class="s">margem de '+pct(c.margem)+'</span></div></div>';
   function grp(t,v,items){return '<div class="grp"><div class="grp-h"><span>'+t+'</span><span>'+brl(v)+'</span></div>'+items.filter(Boolean).map(function(i){return '<div class="grp-i"><span>'+i[0]+'</span><span>'+brl(i[1])+'</span></div>'}).join('')+'</div>'}
   var labor=c.labor,detail=labor&&labor.detalhe;
   var laborRows=detail?detail.map(function(row){return [esc(row.etapa+' · '+row.nome+' · '+dec(row.horas,1)+' h'),row.valor]}).concat([['Rateio dos custos fixos',labor.rateio]]):
     [['Oficina ('+dec(n(d.horasOficina),1)+' h)',n(d.horasOficina)*c.custoHora],['Instalação ('+dec(n(d.horasInstalacao),1)+' h)',n(d.horasInstalacao)*c.custoHora],['Custo da hora',c.custoHora]];
   $('#rv-brk').innerHTML='<div class="card-head"><h3>Custo detalhado</h3></div><div class="brk2">'+
    grp('Material',c.material,[['Chapas ('+dec(c.chapasQtd,0)+')',c.chapasCusto],['Fita de borda ('+dec(c.fitaRolos,0)+' rolo'+(c.fitaRolos===1?'':'s')+')',c.fitaCusto],['Ferragens e insumos',c.itensCusto],c.outros?['Outros materiais',c.outros]:null,['Reserva para perdas ('+pct(d.reservaPct)+')',c.reserva]])+
-   (c.custosAreas?grp('Mão de obra usada no projeto',c.custosAreas.maoObra,detail?detail.map(function(row){return [esc(row.nome+' · '+dec(row.horas,1)+' h'),row.valor]}):[])+grp('Custo da empresa',c.custosAreas.empresa,labor&&labor.rateioModo==='dias'?[['Custo diário da empresa',labor.empresaDia],['Dias × diária × parcela de uso ('+pct(labor.ocupacao==null?100:labor.ocupacao)+')',labor.rateio]]:[]):grp('Mão de obra e oficina',c.maoObra,laborRows))+
+   grp('Mão de obra e oficina',c.maoObra,laborRows)+
    grp('Terceiros e frete',c.terceiros+c.frete,[['Terceiros',c.terceiros],['Frete e deslocamento',c.frete]])+
    '<div class="grp-t"><span>Custo total</span><span>'+brl(c.custo)+'</span></div>'+
    '<div class="grp-i"><span>Imposto ('+pct(c.imp*100)+')</span><span>'+brl(c.impostoV)+'</span></div>'+(c.rt?'<div class="grp-i"><span>RT '+esc(d.rtNome||'')+' ('+pct(c.rt*100)+')</span><span>'+brl(c.rtV)+'</span></div>':'')+
-   '<div class="grp-i"><span>Lucro total ('+pct(c.margem)+')</span><span>'+brl(c.sobra)+'</span></div>'+
+   '<div class="grp-i"><span>Lucro da empresa ('+pct(c.margem)+')</span><span>'+brl(c.sobra)+'</span></div>'+
    '<div class="grp-t big"><span>Preço</span><span>'+brl(P)+'</span></div></div>';
   var diffN=c.refN-P;var nMsg;
   if(Math.abs(diffN)/P<0.03)nMsg='Chega praticamente no preço calculado.';
@@ -1798,7 +1788,7 @@ function live(){
   $$('[data-sub="fitas"]').forEach(function(el){var r=d.fitas[+el.dataset.i];var m=r&&C.fitas.find(function(x){return x.id===r.id});el.textContent=m?brl(n(r.qtd)*m.preco):''});
   var it=$('#itens-total');if(it)it.innerHTML=(d.itens||[]).length?'<span>Total de ferragens e insumos</span><b>'+brl(c.itensCusto)+'</b>':'';
   var fh=$('#fita-hint');if(fh){if(!c.chapasFita)fh.textContent='';else{var f0=C.fitas.find(function(x){return x.id===((d.fitas||[])[0]||{}).id})||C.fitas[0];var rm=f0?n(f0.metros)||50:50;var sug=Math.ceil(c.fitaEst/rm);fh.textContent='Estimativa: '+dec(c.fitaEst,0)+' m para '+dec(c.chapasFita,0)+' chapa'+(c.chapasFita===1?'':'s')+' ('+dec(C.fitaPorChapa,0)+' m por chapa). Dá '+sug+' rolo'+(sug===1?'':'s')+' de '+dec(rm,0)+' m.'+(c.fitaRolos&&c.fitaMetros<c.fitaEst?' Os rolos marcados somam '+dec(c.fitaMetros,0)+' m.':'')}}
-  var ch=$('#ch-hint');if(ch)ch.textContent=d.maoModo==='etapas'||d.maoModo==='separado'?'':'Custo da hora: '+brl(c.custoHora);
+  var ch=$('#ch-hint');if(ch)ch.textContent=d.maoModo==='etapas'?'':'Custo da hora: '+brl(c.custoHora);
   var ms=$('#marg-sug');if(ms)ms.textContent=pct(c.margemSug);
   var mb=$('#marg-base');if(mb){var aj=c.ajustes.filter(function(a){return a.w}).map(function(a){return (a.w>0?'+':'−')+Math.abs(a.w)}).join(' ');mb.textContent='Base '+pct(C.margemBase)+(aj?' '+aj:'')+(c.manual?' · usando '+pct(c.margem):'')}
   $$('.conds-pick .chk').forEach(function(el){var inp=el.querySelector('input');var f=forma(inp.dataset.cond);var sp=el.querySelector('.cp');if(!sp){sp=document.createElement('b');sp.className='cp num';el.appendChild(sp)}sp.textContent=c.valido?brl0(calcCond(c,f).preco):''});
@@ -1822,7 +1812,7 @@ function onEditorInput(e){
     if(f==='clienteId'){d.clienteId=t.value||null;var cl=cliente(t.value);d.contato=cl?{nome:cl.nome,telefone:cl.telefone}:{nome:'',telefone:''};rerenderEditor();return}
     var v=t.type==='checkbox'?t.checked:t.type==='number'?(t.value===''?'':n(t.value)):t.value;
     setPath(d,f,v);
-    if(f==='precoModo'||f==='rateioModo'||/^maoLancamentos\.\d+\.pessoa$/.test(f)){rerenderEditor();var control=document.getElementById(t.id);if(control)control.focus();return}
+    if(f==='rateioModo'||/^maoLancamentos\.\d+\.pessoa$/.test(f)){rerenderEditor();var control=document.getElementById(t.id);if(control)control.focus();return}
     if(f==='valorarEntregas'){rerenderEditor();$('#ed-valorarItens').focus();return}
     if(f==='titulo'){var h=$('.page-head h1');if(h)h.textContent=t.value||'Sem título'}
   }else if(t.dataset.row){var r=d[t.dataset.row][+t.dataset.i];r[t.dataset.k]=t.dataset.k==='qtd'?n(t.value):t.value}
@@ -2049,6 +2039,59 @@ function openEntrega(id){var o=obra(id);if(!o)return;var r=o.realizado||{};
     foot:'<button class="btn btn-ghost" data-act="closeModal">Cancelar</button><button class="btn btn-primary" data-act="confirmEntrega" data-id="'+id+'">'+(o.etapa===4?'Salvar':'Entregar projeto')+'</button>'});
 }
 /* ---------- Dinheiro ---------- */
+function contaModal(p){
+  p=p||{};
+  openModal({title:p.id?'Editar conta a pagar':'Nova conta a pagar',body:'<input type="hidden" id="nc-id" value="'+esc(p.id||'')+'">'+field('Descrição','nc-desc',p.desc||'',{ph:'Ex.: Energia elétrica'})+'<div class="fgrid">'+selectF('Categoria','nc-cat',p.categoria||'Material',['Material','Custo fixo','Equipe','Terceiros','Comissão','Impostos','Outros'])+field('Valor (R$)','nc-val',p.valor==null?'':p.valor,{type:'number',step:'any'})+field('Vencimento','nc-venc',p.venc||today(),{type:'date'})+'</div>'+(p.key&&p.key.startsWith('fixo-')?'<p class="muted small">Altera somente esta conta. Os próximos meses usam o valor e o vencimento da programação.</p>':''),foot:'<button class="btn btn-primary" data-act="saveConta">Salvar</button>'});
+}
+function fixedBillDate(month,day){
+  var last=new Date(+month.slice(0,4),+month.slice(5,7),0).getDate();
+  return month+'-'+pad(Math.min(day,last));
+}
+function ensureFixedBills(month){
+  if(!S||readOnly)return false;
+  var now=mesAtual(),target=/^\d{4}-(0[1-9]|1[0-2])$/.test(month||'')&&month>now?month:now,changed=false;
+  var ignored=S.config.contasFixasIgnoradas||[];
+  (S.config.custosFixos||[]).forEach(function(f){
+    var start=f.mensalDesde,day=Number(f.diaMensal);
+    if(!f.lancarMensal||!f.id||!String(f.nome||'').trim()||n(f.valor)<=0||!/^\d{4}-(0[1-9]|1[0-2])$/.test(start||'')||!Number.isInteger(day)||day<1||day>31)return;
+    var month=start,count=0;
+    while(month<=target&&count++<240){
+      var key='fixo-'+f.id+'-'+month;
+      if(!ignored.includes(key)&&!S.pagar.some(function(p){return p.key===key})){
+        var matches=S.pagar.filter(function(p){return !p.key&&p.categoria==='Custo fixo'&&String(p.venc||'').slice(0,7)===month&&mobcloudKey(p.desc||'')===mobcloudKey(f.nome)});
+        if(matches.length===1){matches[0].key=key;changed=true}
+        else if(!matches.length){S.pagar.push({id:uid(),key:key,fixoId:f.id,competencia:month,desc:f.nome,categoria:'Custo fixo',venc:fixedBillDate(month,day),valor:n(f.valor),status:'pendente'});changed=true}
+      }
+      month=addMonths(month+'-01',1).slice(0,7);
+    }
+  });
+  return changed;
+}
+function configureFixedBills(){
+  var costs=S.config.custosFixos.filter(function(f){return String(f.nome||'').trim()&&n(f.valor)>0});
+  if(!costs.length){openModal({title:'Contas fixas mensais',body:'<p>Cadastre primeiro os valores em Ajustes → Oficina → Custos fixos do mês.</p>',foot:'<button class="btn btn-primary" data-act="openFixedCosts">Cadastrar custos fixos</button>'});return}
+  openModal({title:'Programar contas fixas mensais',body:
+    '<p>Escolha quais despesas devem entrar no A pagar todos os meses e informe o vencimento. Os valores vêm dos custos fixos salvos em Ajustes.</p>'+
+    '<div class="field"><label for="fixed-start">Primeiro mês dos novos agendamentos</label><input class="in" type="month" id="fixed-start" value="'+mesAtual()+'"></div>'+
+    costs.map(function(f,i){return '<div class="sec"><label class="chk"><input type="checkbox" id="fixed-on-'+i+'" data-fixed="'+esc(f.id)+'"'+(f.lancarMensal?' checked':'')+'> '+esc(f.nome)+' · '+brl(f.valor)+'/mês</label><div class="field"><label for="fixed-day-'+i+'">Dia do vencimento de '+esc(f.nome)+'</label><input class="in" type="number" min="1" max="31" step="1" id="fixed-day-'+i+'" value="'+esc(f.diaMensal||5)+'"></div></div>'}).join('')+
+    '<p class="muted small">Dias 29 a 31 são ajustados ao último dia dos meses menores. Contas já lançadas são mantidas, inclusive as pagas. Desmarcar uma despesa interrompe novos lançamentos. Contas manuais com mesmo nome e mês são aproveitadas, preservando o valor já registrado, quando há uma única correspondência.</p><p id="fixed-error" role="status"></p>',
+    foot:'<button class="btn" data-act="closeModal">Cancelar</button><button class="btn btn-primary" data-act="saveFixedBills">Salvar programação</button>'});
+}
+function saveFixedBills(){
+  if(readOnly)return;
+  var start=val('fixed-start'),checks=$$('[data-fixed]');
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(start)){$('#fixed-error').textContent='Informe o primeiro mês.';return}
+  for(var i=0;i<checks.length;i++){
+    var day=Number(val('fixed-day-'+i));
+    if(checks[i].checked&&(!Number.isInteger(day)||day<1||day>31)){$('#fixed-error').textContent='Informe um dia de vencimento entre 1 e 31.';return}
+  }
+  checks.forEach(function(input,i){var f=S.config.custosFixos.find(function(f){return f.id===input.dataset.fixed});if(!f)return;if(input.checked&&!f.lancarMensal)f.mensalDesde=start;f.lancarMensal=input.checked;f.diaMensal=Number(val('fixed-day-'+i))});
+  ensureFixedBills(ui.cxMonth);closeModal();ui.dTab='pagar';ui.cfg=null;location.hash='#dinheiro';save('Programação salva. As contas mensais serão lançadas ao abrir o sistema.');
+}
+function fixedBillsHint(){
+  var missing=S.config.custosFixos.filter(function(f){return String(f.nome||'').trim()&&n(f.valor)>0&&!f.lancarMensal});
+  return missing.length?'<p class="muted small">'+missing.length+' custo(s) fixo(s) ainda sem programação mensal. Configure para que a meta inclua todas as despesas da oficina.</p>':'';
+}
 function vDinheiro(){
   if(['geral','caixinhas','receber','pagar','lucro'].indexOf(ui.dTab)<0)ui.dTab='geral';
   var tabs=[['geral','Visão geral'],['receber','A receber'],['pagar','A pagar'],['lucro','Lucro por projeto'],['caixinhas','Caixinhas']];
@@ -2079,12 +2122,13 @@ function dReceber(){
     tblCard('Recebidas recentemente',rec.length,recRows(rec),head,'Nada recebido ainda.');
 }
 function pagRows(list){return list.map(function(p){var st=pagStatus(p);
-  return '<tr><td class="num">'+fd(p.venc)+(st==='atrasado'?'<br><span class="small" style="color:var(--bad);font-weight:600">atrasada</span>':'')+'</td><td><b>'+esc(p.desc)+'</b></td><td class="muted small">'+esc(p.categoria)+'</td><td class="r"><b>'+brl(p.valor)+'</b></td><td class="r">'+(p.status==='pago'?'<span class="muted small">Pago '+fds(p.pagoEm)+'</span> <button class="btn btn-sm btn-ghost" data-act="undoPag" data-id="'+p.id+'">Desfazer</button>':'<button class="btn btn-sm btn-primary" data-act="pagar" data-id="'+p.id+'">Paguei</button> <button class="icon-btn" data-act="delConta" data-id="'+p.id+'" aria-label="Excluir conta">×</button>')+'</td></tr>'}).join('')}
+  return '<tr><td class="num">'+fd(p.venc)+(st==='atrasado'?'<br><span class="small" style="color:var(--bad);font-weight:600">atrasada</span>':'')+'</td><td><b>'+esc(p.desc)+'</b></td><td class="muted small">'+esc(p.categoria)+'</td><td class="r"><b>'+brl(p.valor)+'</b></td><td class="r">'+(p.status==='pago'?'<span class="muted small">Pago '+fds(p.pagoEm)+'</span> <button class="btn btn-sm btn-ghost" data-act="undoPag" data-id="'+p.id+'">Desfazer</button>':'<button class="btn btn-sm btn-primary" data-act="pagar" data-id="'+p.id+'">Paguei</button> <button class="btn btn-sm btn-ghost" data-act="editConta" data-id="'+p.id+'">Editar</button> <button class="icon-btn" data-act="delConta" data-id="'+p.id+'" aria-label="Excluir conta">×</button>')+'</td></tr>'}).join('')}
 function dPagar(){
   var abertas=S.pagar.filter(function(p){return p.status!=='pago'}).sort(function(a,b){return a.venc.localeCompare(b.venc)});
   var pagas=S.pagar.filter(function(p){return p.status==='pago'}).sort(function(a,b){return (b.pagoEm||'').localeCompare(a.pagoEm||'')}).slice(0,10);
   var head='<th>Vencimento</th><th>Descrição</th><th>Categoria</th><th class="r">Valor</th><th></th>';
   return '<div class="actions" style="margin-bottom:14px"><button class="btn btn-primary" data-act="newConta"><span class="plus">+</span>Nova conta</button><button class="btn" data-act="lancarFolha">Lançar pagamentos da equipe do mês</button></div>'+
+    '<div class="actions" style="margin-bottom:14px"><button class="btn" data-act="configureFixedBills">Programar contas fixas mensais</button></div>'+fixedBillsHint()+
     moneyTiles(S.pagar,'valor','pago','Pago no mês')+
     tblCard('Contas a pagar',abertas.length,pagRows(abertas),head,'Nenhuma conta em aberto.')+
     tblCard('Pagas recentemente',pagas.length,pagRows(pagas),head,'Nada pago ainda.');
@@ -2104,64 +2148,16 @@ function niceMax(v){if(v<=0)return 1000;var st=v/4;var p=Math.pow(10,Math.floor(
 function barPath(x,y,w,h,r){if(h<=0)return '';r=Math.min(r,w/2,h);return 'M'+x+','+(y+h)+'V'+(y+r)+'Q'+x+','+y+' '+(x+r)+','+y+'H'+(x+w-r)+'Q'+(x+w)+','+y+' '+(x+w)+','+(y+r)+'V'+(y+h)+'Z'}
 function inPer(d){if(!d)return false;return ui.dPer==='mes'?d.slice(0,7)===ui.dRef:d.slice(0,4)===ui.dRef.slice(0,4)}
 function dGeral(){
-  var C=S.config,t=today();
-  var ano=ui.dRef.slice(0,4);
-  var perLabel=ui.dPer==='mes'?MESES_LONG[+ui.dRef.slice(5,7)-1]+' de '+ano:ano;var perTitle=perLabel.charAt(0).toUpperCase()+perLabel.slice(1);
-  var vendidas=S.obras.filter(function(o){return inPer(o.criadoEm)});
-  var rdL=0,rdD=0,rdN=0,rdC=0;S.obras.forEach(function(o){if(!o.entregueEm||!inPer(o.entregueEm))return;var rd=rendeDia(o);if(rd.real==null)return;rdL+=rd.real*rd.diasReal;rdD+=rd.diasReal;rdC+=rd.custoDia*rd.diasReal;rdN++});var rdM=rdD?rdL/rdD:null;
-  var vendido=vendidas.reduce(function(a,o){return a+o.valor},0);
-  var lucroPrev=vendidas.reduce(function(a,o){return a+o.sobra},0);
-  var recebido=S.receber.filter(function(r){return r.status==='recebido'&&inPer(r.recebidoEm)}).reduce(function(a,r){return a+r.liquido},0);
-  var pagos=S.pagar.filter(function(p){return p.status==='pago'&&inPer(p.pagoEm)});
-  var pago=pagos.reduce(function(a,p){return a+n(p.valor)},0);
-  var resultado=recebido-pago;
-  var aprov=S.orcamentos.filter(function(q){return q.status==='aprovado'&&inPer(q.aprovadoEm)}).length;
-  var perd=S.orcamentos.filter(function(q){return q.status==='perdido'&&inPer(q.perdidoEm||q.enviadoEm)}).length;
-  var enviados=S.orcamentos.filter(function(q){return inPer(q.enviadoEm)}).length;
-  var emAberto=S.receber.filter(function(r){return r.status!=='recebido'}).reduce(function(a,r){return a+r.liquido},0);
-  var aPagar=S.pagar.filter(function(p){return p.status!=='pago'}).reduce(function(a,p){return a+n(p.valor)},0);
-  /* gráfico anual */
-  var ent=[],sai=[];for(var i=0;i<12;i++){ent.push(0);sai.push(0)}
-  S.receber.forEach(function(r){if(r.status==='recebido'&&r.recebidoEm&&r.recebidoEm.slice(0,4)===ano)ent[+r.recebidoEm.slice(5,7)-1]+=r.liquido});
-  S.pagar.forEach(function(p){if(p.status==='pago'&&p.pagoEm&&p.pagoEm.slice(0,4)===ano)sai[+p.pagoEm.slice(5,7)-1]+=n(p.valor)});
-  var W=720,H=250,pl=58,pr=8,pt=12,pb=28,ch=H-pt-pb,cw=W-pl-pr;
-  var mx=niceMax(Math.max.apply(null,ent.concat(sai)));
-  var gw=cw/12,bw=Math.min(16,gw*0.3);
-  var sel=ui.dPer==='mes'&&ui.dRef.slice(0,4)===ano?+ui.dRef.slice(5,7)-1:-1;
-  var svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Entradas e saídas por mês em '+ano+'">';
-  for(var g=0;g<=4;g++){var y=pt+ch-ch*g/4;svg+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y+'" y2="'+y+'" stroke="rgba(0,0,0,'+(g?0.06:0.14)+')" stroke-width="1"/><text x="'+(pl-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="#6E6E73">'+kfmt(mx*g/4)+'</text>'}
-  for(var m=0;m<12;m++){
-    var cx=pl+gw*m+gw/2;var he=ch*ent[m]/mx,hs=ch*sai[m]/mx;
-    var op=sel<0||sel===m?1:0.35;
-    svg+='<g data-m="'+m+'" style="cursor:default">'+'<rect x="'+(pl+gw*m)+'" y="'+pt+'" width="'+gw+'" height="'+ch+'" fill="transparent"/>'+
-      '<path d="'+barPath(cx-bw-1,pt+ch-he,bw,he,4)+'" fill="#2A5E9A" opacity="'+op+'"/>'+
-      '<path d="'+barPath(cx+1,pt+ch-hs,bw,hs,4)+'" fill="#C08442" opacity="'+op+'"/>'+
-      '<text x="'+cx+'" y="'+(H-8)+'" text-anchor="middle" font-size="11.5" fill="'+(sel===m?'#1D1D1F':'#6E6E73')+'" font-weight="'+(sel===m?'600':'400')+'">'+MESES[m]+'</text></g>';
-  }
-  svg+='</svg>';
-  ui.chartData={ano:ano,ent:ent,sai:sai};
-  /* categorias */
-  var cats={};pagos.forEach(function(p){cats[p.categoria||'Outros']=(cats[p.categoria||'Outros']||0)+n(p.valor)});
-  var ck=Object.keys(cats).sort(function(a,b){return cats[b]-cats[a]});var cmax=ck.length?cats[ck[0]]:1;
-  var catHTML=ck.length?ck.map(function(k){return '<div class="hbar"><span>'+esc(k)+'</span><span class="track"><span class="fill" style="display:block;width:'+Math.max(2,cats[k]/cmax*100)+'%"></span></span><span class="r">'+brl0(cats[k])+'</span></div>'}).join(''):'<p class="muted small">Nenhuma despesa paga neste período.</p>';
-  var obrasRows=vendidas.sort(function(a,b){return b.criadoEm.localeCompare(a.criadoEm)}).map(function(o){var c=cliente(o.clienteId);var lr=lucroReal(o);return '<tr><td><b>'+esc(o.titulo)+'</b><br><span class="muted small">'+esc(c?c.nome:'')+' · '+fds(o.criadoEm)+'</span></td><td class="r">'+brl0(o.valor)+'</td><td class="r">'+brl0(o.sobra)+'</td><td class="r">'+(lr==null?'<span class="muted">em aberto</span>':'<span style="color:var(--'+(lr>=o.sobra?'ok':'bad')+');font-weight:600">'+brl0(lr)+'</span>')+'</td></tr>'}).join('');
-  function tile(k,v,s,tone,color){return '<div class="tile '+(tone||'')+'"><span class="k">'+k+'</span><span class="v"'+(color?' style="color:var(--'+color+')"':'')+'>'+v+'</span><span class="s">'+s+'</span></div>'}
-  return '<div class="dash-bar"><div class="seg">'+[['mes','Mês'],['ano','Ano']].map(function(x){return '<button data-act="dPer" data-p="'+x[0]+'" class="'+(ui.dPer===x[0]?'on':'')+'">'+x[1]+'</button>'}).join('')+'</div><div class="period"><button class="icon-btn" data-act="dShift" data-d="-1" aria-label="Período anterior">‹</button><b>'+perTitle+'</b><button class="icon-btn" data-act="dShift" data-d="1" aria-label="Próximo período">›</button></div></div>'+
-  '<div class="tiles">'+
-   tile('Vendido',brl0(vendido),vendidas.length+' contrato'+(vendidas.length===1?'':'s')+' fechado'+(vendidas.length===1?'':'s'),'hero')+
-   tile('Recebido',brl0(recebido),'líquido de taxas','')+
-   tile('Despesas pagas',brl0(pago),pagos.length+' pagamento'+(pagos.length===1?'':'s'),'brown')+
-   tile('Resultado de caixa',(resultado<0?'−':'')+brl0(Math.abs(resultado)),'recebido menos pago','',resultado>=0?'ok':'bad')+
-  '</div><div class="tiles">'+
-   tile('Lucro previsto nas vendas',brl0(lucroPrev),vendido?'margem média de '+pct(lucroPrev/vendido*100):'sem vendas no período','')+
-   tile('Ticket médio',vendidas.length?brl0(vendido/vendidas.length):'—','por contrato','')+
-   tile('Taxa de fechamento',(aprov+perd)?pct(aprov/(aprov+perd)*100):'—',enviados+' enviado'+(enviados===1?'':'s')+' · '+aprov+' aprovado'+(aprov===1?'':'s')+' · '+perd+' perdido'+(perd===1?'':'s'),'')+
-   tile('Saldo a vencer',brl0(emAberto-aPagar),'a receber '+brl0(emAberto)+' · a pagar '+brl0(aPagar),'')+
-   tile('Rende por dia de trabalho',rdM==null?'—':brl0(rdM),rdM==null?'nenhum projeto entregue no período':rdN+' entregue'+(rdN===1?'':'s')+' · um dia custa '+brl0(rdC/rdD),'',rdM==null?'':rdM>=rdC/rdD?'ok':'bad')+
-  '</div>'+
-  '<div class="dash-grid"><div class="card chart-card"><div class="chart-head"><h3>Entradas e saídas em '+ano+'</h3><div class="legend"><span><i style="background:#2A5E9A"></i>Entradas</span><span><i style="background:#C08442"></i>Saídas</span></div></div><div class="chart" id="chart">'+svg+'<div class="tip" id="chart-tip"></div></div></div>'+
-  '<div class="card chart-card"><div class="chart-head"><h3>Para onde foi o dinheiro</h3><span class="muted small">'+esc(perLabel)+'</span></div>'+catHTML+'</div></div>'+
-  '<div class="card"><div class="card-head"><h3>Projetos vendidos em '+esc(perLabel)+'</h3><span class="pill">'+vendidas.length+'</span></div><div class="scroll">'+(obrasRows?'<table class="tbl"><thead><tr><th>Projeto</th><th class="r">Contrato</th><th class="r">Lucro previsto</th><th class="r">Lucro real</th></tr></thead><tbody>'+obrasRows+'</tbody></table>':'<div class="list"><div class="empty">Nenhum projeto vendido neste período.</div></div>')+'</div></div>';
+  ui.dPer='mes';
+  var month=ui.dRef||mesAtual(),label=MESES_LONG[+month.slice(5,7)-1]+' de '+month.slice(0,4);
+  var received=S.receber.filter(function(r){return r.status==='recebido'&&cxInMonth(r.recebidoEm,month)}).reduce(function(sum,r){return sum+n(r.liquido)},0);
+  var paid=S.pagar.filter(function(p){return p.status==='pago'&&cxInMonth(p.pagoEm,month)}).reduce(function(sum,p){return sum+n(p.valor)},0);
+  var reserve=cxReserve(month,cxMonthly(S.obras.map(cxProject),month));
+  function tile(title,value,description,tone){return '<div class="tile '+(tone||'')+'"><span class="k">'+title+'</span><span class="v">'+brl(value)+'</span><span class="s">'+description+'</span></div>'}
+  return '<div class="dash-bar"><h2>Caixa do mês</h2><div class="period"><button class="icon-btn" data-act="dShift" data-d="-1" aria-label="Mês anterior">‹</button><b>'+esc(label)+'</b><button class="icon-btn" data-act="dShift" data-d="1" aria-label="Próximo mês">›</button></div></div>'+
+    '<div class="tiles">'+tile('Recebido',received,'líquido de taxas')+tile('Pago',paid,'pagamentos registrados')+tile('Saldo do mês',received-paid,'recebido menos pago')+tile('Falta juntar',reserve.gap/100,'para as contas deste mês','hero')+'</div>'+
+    '<div class="card"><div class="sec"><h2>Contas e reserva</h2><p>Total das contas do mês: <b>'+brl(reserve.total/100)+'</b> · Já pago: <b>'+brl(reserve.paid/100)+'</b> · Reserva disponível para o restante: <b>'+brl(reserve.covered/100)+'</b>.</p>'+
+    '<p class="muted small">A reserva considera somente valores já separados nas Caixinhas. O saldo de caixa acima mostra entradas e pagamentos, sem considerar o saldo anterior.</p>'+fixedBillsHint()+'<div class="actions"><button class="btn" data-act="dTab" data-tab="receber">Ver a receber</button><button class="btn" data-act="dTab" data-tab="pagar">Ver a pagar</button><button class="btn btn-primary" data-act="overviewCaixinhas" data-month="'+esc(month)+'">Ver caixinhas do mês</button></div></div></div>';
 }
 var MESES_LONG=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 function chartHover(e){
@@ -2243,7 +2239,8 @@ function cxReserve(month,totals){
     var paid=p.status==='pago';
     if(cxInMonth(paid?(p.pagoEm||p.venc):p.venc,month))rows[index][paid?'paid':'open']+=cxCents(p.valor);
   });
-  var summary={open:0,covered:0,gap:0,rows:rows};
+  var summary={open:0,covered:0,gap:0,total:0,paid:0,rows:rows};
+  S.pagar.forEach(function(p){if(cxInMonth(p.venc,month)){summary.total+=cxCents(p.valor);if(p.status==='pago')summary.paid+=cxCents(p.valor)}});
   rows.forEach(function(row){
     var available=Math.max(0,row.separated-row.paid);
     row.covered=Math.min(row.open,available);
@@ -2266,15 +2263,15 @@ function cxMonthCard(projects){
     '<input class="in" id="cx-month" type="month" value="'+esc(month)+'" aria-label="Mês das Caixinhas">'+
     '<button class="btn btn-sm" data-act="cxMonthShift" data-d="1" aria-label="Próximo mês">›</button></div></div>'+
     '<div class="cx-reserve"><div class="cx-project-head"><h3>Reserva para as contas do mês</h3><a class="btn btn-sm" href="#dinheiro" data-act="goTab" data-tab="pagar">Ver contas a pagar</a></div>'+
-    '<dl class="cx-reserve-values">'+amount('Meta para contas em aberto',reserve.open)+amount('Coberto pela reserva do mês',reserve.covered)+amount('Falta acumular',reserve.gap,reserve.gap?'cx-reserve-gap':'')+'</dl>'+
-    '<p class="muted small">'+(reserve.open?'A meta usa as contas em aberto com vencimento neste mês. A cobertura considera o que já foi separado, desconta os pagamentos registrados no mês e usa o saldo da mesma categoria.':'Nenhuma conta em aberto lançada com vencimento neste mês.')+'</p></div>'+
-    '<div class="scroll" role="region" aria-label="Resumo mensal por categoria" tabindex="0"><table class="tbl cx-month-table"><thead><tr><th>Categoria</th><th class="r">A receber</th><th class="r">A separar</th><th class="r">Separado</th><th class="r">Contas em aberto</th><th class="r">Falta acumular</th></tr></thead><tbody>'+
+    '<dl class="cx-reserve-values">'+amount('Total das contas do mês',reserve.total)+amount('Já pago',reserve.paid)+amount('Reservado para o restante',reserve.covered)+amount('Falta juntar neste mês',reserve.gap,reserve.gap?'cx-reserve-gap':'')+'</dl>'+
+    '<p class="muted small">'+(reserve.total?'O total inclui contas pagas e em aberto com vencimento neste mês. Do restante, descontamos a reserva disponível na categoria correspondente. Valores ainda a receber não contam como dinheiro já reservado.':'Nenhuma conta lançada com vencimento neste mês. Programe os custos fixos e inclua equipe, impostos e demais despesas no A pagar para completar a meta.')+'</p><button class="btn btn-sm" data-act="configureFixedBills">Programar contas fixas</button>'+fixedBillsHint()+'</div>'+
+    '<details class="cx-month-details"><summary>Ver divisão por categoria</summary><div class="scroll" role="region" aria-label="Resumo mensal por categoria" tabindex="0"><table class="tbl cx-month-table"><thead><tr><th>Categoria</th><th class="r">A receber</th><th class="r">A separar</th><th class="r">Separado</th><th class="r">Contas em aberto</th><th class="r">Falta acumular</th></tr></thead><tbody>'+
     CX.map(function(c,i){
       var x=totals[i];
       return '<tr><th scope="row"><span class="cx-name"><i class="sw" style="background:'+c[1]+'"></i>'+c[0]+'</span></th>'+
         '<td class="r">'+brl(x.receive/100)+'</td><td class="r'+(x.pending?' received-to-split':'')+'">'+brl(x.pending/100)+'</td>'+
         '<td class="r'+(x.done?' received-split':'')+'">'+brl(x.done/100)+'</td>'+reserveCells(reserve.rows[i])+'</tr>';
-    }).join('')+(reserve.rows[CX.length].open?'<tr><th scope="row">Outras contas</th><td></td><td></td><td></td>'+reserveCells(reserve.rows[CX.length])+'</tr>':'')+'</tbody></table></div></section>';
+    }).join('')+(reserve.rows[CX.length].open?'<tr><th scope="row">Outras contas</th><td></td><td></td><td></td>'+reserveCells(reserve.rows[CX.length])+'</tr>':'')+'</tbody></table></div></details></section>';
 }
 function cxTable(x){
   return '<div class="scroll" role="region" aria-label="Valores por caixinha" tabindex="0"><table class="tbl cx-project-tbl"><thead><tr><th>Destino</th><th class="r">%</th><th class="r">Previsto</th><th class="r">A separar</th><th class="r">Separado</th></tr></thead><tbody>'+
@@ -2606,6 +2603,8 @@ var A={
   saveQuote:function(){commitDraft();ui.quoteId=ui.draft.id;save('Orçamento salvo.');live()},
   viewQuote:function(b){viewQuote(b.dataset.id)},
   linkCliente:function(b){var c=cliente(b.dataset.id);ui.draft.clienteId=c.id;ui.draft.contato={nome:c.nome,telefone:c.telefone};rerenderEditor();autoSaveDraft()},
+  profitAreas:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;var c=calcQuote(d);d.lucros=profitDefaults(c);d.precoModo='areas';rerenderEditor();autoSaveDraft()},
+  profitGlobal:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;delete d.precoModo;rerenderEditor();autoSaveDraft()},
   margSug:function(){ui.draft.margemManual='';rerenderEditor();autoSaveDraft()},
   useRefN:function(){var c=calcQuote(ui.draft);var m=(1-c.imp-c.rt-c.custo/c.refN)*100;if(m<=0){toast('Nesse valor a empresa teria prejuízo.');return}ui.draft.margemManual=Math.round(m*10)/10;rerenderEditor();autoSaveDraft();toast('Preço ajustado para material × '+dec(c.N)+'. Margem de '+pct(ui.draft.margemManual)+'.')},
   useSug:function(){var h=sugHoras(ui.draft);ui.draft.horasOficina=h.of;ui.draft.horasInstalacao=h.inst;ui.autoHoras=false;rerenderEditor();autoSaveDraft()},
@@ -2624,7 +2623,7 @@ var A={
     var rows=d.maoLancamentos||(d.maoLancamentos=[]);
     rows.push({etapa:'Corte',pessoa:'dono',horas:'',valorHora:''});
     rerenderEditor();autoSaveDraft();
-    var first=$('#mao-'+(rows.length-1)+(d.maoModo==='separado'?'-pessoa':'-etapa'));if(first)first.focus();
+    var first=$('#mao-'+(rows.length-1)+'-etapa');if(first)first.focus();
   },
   laborDel:function(b){
     var d=ui.draft;if(readOnly||!d||d.status!=='rascunho'||!d.maoLancamentos)return;
@@ -2634,7 +2633,7 @@ var A={
   dPer:function(b){ui.dPer=b.dataset.p;render()},
   dShift:function(b){var k=+b.dataset.d;ui.dRef=(ui.dPer==='mes'?addMonths(ui.dRef+'-01',k):addMonths(ui.dRef+'-01',12*k)).slice(0,7);render()},
   qFilterGo:function(b){ui.qFilter=b.dataset.f;ui.quoteId=null;ui.draft=null},
-  step:function(b){var d=ui.draft;ui.step=+b.dataset.s;ui.autoHoras=false;if(ui.step===2&&d.status==='rascunho'&&d.maoModo!=='etapas'&&d.maoModo!=='separado'&&(!d.mobcloud||d.mobcloud.estimarHoras)&&!n(d.horasOficina)&&!n(d.horasInstalacao)){var h=sugHoras(d);if(h.of){d.horasOficina=h.of;d.horasInstalacao=h.inst;ui.autoHoras=true}}$('#main').innerHTML=vEditor();live();if(ui.autoHoras)autoSaveDraft();var st=$('.stepper');if(st)window.scrollTo(0,Math.max(0,st.getBoundingClientRect().top+window.scrollY-20))},
+  step:function(b){var d=ui.draft;ui.step=+b.dataset.s;ui.autoHoras=false;if(ui.step===2&&d.status==='rascunho'&&d.maoModo!=='etapas'&&(!d.mobcloud||d.mobcloud.estimarHoras)&&!n(d.horasOficina)&&!n(d.horasInstalacao)){var h=sugHoras(d);if(h.of){d.horasOficina=h.of;d.horasInstalacao=h.inst;ui.autoHoras=true}}$('#main').innerHTML=vEditor();live();if(ui.autoHoras)autoSaveDraft();var st=$('.stepper');if(st)window.scrollTo(0,Math.max(0,st.getBoundingClientRect().top+window.scrollY-20))},
   sendQuote:sendQuote,
   showProposal:function(b){var q=b.dataset.id?quote(b.dataset.id):ui.draft;closeModal();showProposal(q)},
   printProposal:function(){try{window.print()}catch(e){toast('A impressão não abriu aqui. Abra o sistema direto no navegador para imprimir.')}},
@@ -2728,6 +2727,7 @@ var A={
   },
   toggleSide:function(){ui.sideC=!ui.sideC;try{localStorage.setItem('bancada-side',ui.sideC?'1':'0')}catch(e){}render()},
   pView:function(b){ui.pView=b.dataset.v;render()},
+  overviewCaixinhas:function(b){ui.cxMonth=b.dataset.month;ui.dTab='caixinhas';render()},
   dTab:function(b){ui.dTab=b.dataset.tab;render()},
   goTab:function(b){ui.dTab=b.dataset.tab;if(location.hash==='#dinheiro')render()},
   recFilter:function(b){ui.recFilter=b.dataset.f;render()},
@@ -2741,9 +2741,22 @@ var A={
   pagar:function(b){var p=S.pagar.find(function(x){return x.id===b.dataset.id});p.status='pago';p.pagoEm=today();save('Pagamento registrado.')},
   undoPag:function(b){var p=S.pagar.find(function(x){return x.id===b.dataset.id});p.status='pendente';p.pagoEm=null;save()},
   delConta:function(b){openModal({title:'Excluir conta?',body:'<p>Esta conta a pagar será removida.</p>',foot:'<button class="btn btn-danger" data-act="confirmDelConta" data-id="'+b.dataset.id+'">Excluir</button>'})},
-  confirmDelConta:function(b){S.pagar=S.pagar.filter(function(p){return p.id!==b.dataset.id});closeModal();save('Conta excluída.')},
-  newConta:function(){openModal({title:'Nova conta a pagar',body:field('Descrição','nc-desc','',{ph:'Ex.: Compra de chapas — Cozinha Ana'})+'<div class="fgrid">'+selectF('Categoria','nc-cat','Material',['Material','Custo fixo','Equipe','Terceiros','Comissão','Impostos','Outros'])+field('Valor (R$)','nc-val','',{type:'number',step:'any'})+field('Vencimento','nc-venc',today(),{type:'date'})+'</div>',foot:'<button class="btn btn-primary" data-act="saveConta">Salvar</button>'})},
-  saveConta:function(){var d=val('nc-desc'),v=n(val('nc-val'));if(!d||!v){toast('Preencha descrição e valor.');return}S.pagar.push({id:uid(),desc:d,categoria:val('nc-cat'),venc:val('nc-venc')||today(),valor:v,status:'pendente'});closeModal();ui.dTab='pagar';save('Conta adicionada.')},
+  confirmDelConta:function(b){var p=S.pagar.find(function(p){return p.id===b.dataset.id});if(p&&p.key&&p.key.startsWith('fixo-')){var ignored=S.config.contasFixasIgnoradas||(S.config.contasFixasIgnoradas=[]);if(!ignored.includes(p.key))ignored.push(p.key)}S.pagar=S.pagar.filter(function(p){return p.id!==b.dataset.id});closeModal();save('Conta excluída.')},
+  configureFixedBills:configureFixedBills,
+  saveFixedBills:saveFixedBills,
+  openFixedCosts:function(){closeModal();ui.cfg=null;ui.aTab='oficina';location.hash='#ajustes';render();cfgLive()},
+  newConta:function(){contaModal()},
+  editConta:function(b){var p=S.pagar.find(function(p){return p.id===b.dataset.id});if(p&&p.status!=='pago')contaModal(p)},
+  saveConta:function(){
+    if(readOnly)return;
+    var desc=val('nc-desc').trim(),value=Number(val('nc-val').replace(',','.')),date=val('nc-venc'),id=val('nc-id');
+    if(!desc||!Number.isFinite(value)||value<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date)||isoOf(pISO(date))!==date){toast('Preencha descrição, valor maior que zero e vencimento válido.');return}
+    var p=id&&S.pagar.find(function(p){return p.id===id});
+    if(id&&!p){toast('Esta conta não está mais disponível.');return}
+    if(p)Object.assign(p,{desc:desc,categoria:val('nc-cat'),venc:date,valor:value});
+    else S.pagar.push({id:uid(),desc:desc,categoria:val('nc-cat'),venc:date,valor:value,status:'pendente'});
+    closeModal();ui.dTab='pagar';save('Conta salva.');
+  },
   lancarFolha:function(){var m=mesAtual();var venc=addMonths(m+'-05',1);var k=0;
     S.equipe.forEach(function(e){if(e.status==='Desligado'||e.vinculo==='Empreitada')return;var key='folha-'+m+'-'+e.id;if(S.pagar.some(function(p){return p.key===key}))return;
       var v=e.vinculo==='Diarista'?n(e.valor)*n(e.diasMes):n(e.valor);S.pagar.push({id:uid(),key:key,desc:(e.vinculo==='Diarista'?'Diárias':'Salário')+' — '+e.nome,categoria:'Equipe',venc:venc,valor:v,status:'pendente'});k++});
