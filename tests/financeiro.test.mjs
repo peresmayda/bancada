@@ -82,14 +82,22 @@ test('recebimentos futuros e reservas de outra categoria não cobrem as contas f
   assert.equal(api.cxReserve(month, totals).gap, 100000);
 });
 
-test('caixinhas mostram a meta sem projetos e visão geral tem só quatro indicadores', () => {
+test('caixinhas mantêm a tabela anterior e acrescentam só a meta; visão geral recupera os indicadores', () => {
   const { api, month } = setup();
   api.ensureFixedBills(month);
   const card = api.cxMonthCard([]);
   assert.match(card, /Falta juntar neste mês/);
-  assert.match(card, /Total das contas do mês/);
-  assert.match(card, /<details class="cx-month-details">/);
+  assert.match(card, /Total do mês/);
+  assert.match(card, /Resumo mensal por categoria/);
+  assert.doesNotMatch(card, /<details/);
   const overview = api.dGeral();
-  assert.equal((overview.match(/class="tile /g) || []).length, 4);
-  assert.doesNotMatch(overview, /Ticket médio|Taxa de fechamento|Entradas e saídas em/);
+  assert.match(overview, /Ticket médio/);
+  assert.match(overview, /Lucro previsto nas vendas/);
+  assert.match(overview, /Custo previsto das vendas/);
+  assert.match(overview, /Entradas e saídas em/);
+});
+
+test('recebimento antigo sem descrição não impede abrir as caixinhas', () => {
+  const { api, month } = setup();
+  assert.match(api.cxPayments({ id: 'projeto' }, { rows: [{ rec: { id: 'recebimento', liquido: 100, recebidoEm: month + '-01' }, values: [0, 0, 0, 0, 0, 0], separated: false }] }), /Recebimento/);
 });

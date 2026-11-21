@@ -361,7 +361,7 @@ function bootCloud(){
   cloud=window.createBancadaCloud({
     root:function(){return $('#app')},
     lock:function(){
-      S=null;cloudProfile='';readOnly=true;ui.cfg=null;ui.draft=null;ui.quoteId=null;ui.backup=null;ui.mobcloud=null;ui.apProposal=null;
+      S=null;cloudProfile='';readOnly=true;ui.importDraft=null;ui.cfg=null;ui.draft=null;ui.quoteId=null;ui.backup=null;ui.mobcloud=null;ui.apProposal=null;
       closeModal();
       $('#toast-root').innerHTML='';
     },
@@ -536,6 +536,51 @@ function condLabel(x){
 function forma(id){return S.config.formas.find(function(f){return f.id===id})}
 function cliente(id){return S.clientes.find(function(c){return c.id===id})}
 function quote(id){return S.orcamentos.find(function(q){return q.id===id})}
+function clientContact(c){return {nome:c&&c.nome||'',telefone:c&&c.telefone||'',email:c&&c.email||'',endereco:c&&c.endereco||''}}
+function saveClientRecord(values,id){
+  var name=String(values.nome||'').trim();
+  if(!name)return {error:'Informe o nome do cliente.'};
+  var duplicate=S.clientes.find(function(c){return c.id!==id&&mobcloudKey(c.nome||'')===mobcloudKey(name)});
+  if(duplicate)return {error:'Já existe um cliente com esse nome. Abra o cadastro existente para editar.'};
+  var c=id&&cliente(id);
+  if(id&&!c)return {error:'Cliente não encontrado.'};
+  var previous=c&&c.endereco||'';
+  if(!c){c={id:uid(),criadoEm:today()};S.clientes.push(c)}
+  Object.assign(c,{nome:name,telefone:String(values.telefone||'').trim(),email:String(values.email||'').trim(),endereco:String(values.endereco||'').trim(),obs:String(values.obs||'').trim()});
+  S.orcamentos.forEach(function(q){
+    if(q.clienteId!==c.id||q.status!=='rascunho')return;
+    var address=q.contato&&q.contato.endereco;
+    q.contato=Object.assign({},q.contato,{nome:c.nome,telefone:c.telefone,email:c.email});
+    if(!address||address===previous)q.contato.endereco=c.endereco;
+  });
+  return {client:c};
+}
+function quoteDeleteReason(q){
+  if(!q)return 'Orçamento não encontrado.';
+  if(q.status==='aprovado'||q.obraId||S.obras.some(function(o){return o.quoteId===q.id})||approvedRevision(q))return 'Este orçamento tem um projeto aprovado. Preserve o contrato e os lançamentos financeiros; ele não pode ser excluído por aqui.';
+  if(S.orcamentos.some(function(x){return x.revisaoDe===q.id}))return 'Existem revisões vinculadas. Exclua as revisões antes desta versão.';
+  return '';
+}
+function deleteQuoteRecord(id){
+  var q=quote(id),error=quoteDeleteReason(q);
+  if(error)return {error:error};
+  var trash=S.orcamentosExcluidos||(S.orcamentosExcluidos=[]);
+  trash.push(Object.assign(clone(q),{excluidoEm:today()}));
+  S.orcamentos=S.orcamentos.filter(function(x){return x.id!==id});
+  return {deleted:q};
+}
+function restoreQuoteRecord(id){
+  var trash=S.orcamentosExcluidos||[],q=trash.find(function(q){return q.id===id});
+  if(!q||quote(id))return {error:'O orçamento não está na lixeira ou já foi restaurado.'};
+  if(q.revisaoDe&&!quote(q.revisaoDe))return {error:'Restaure primeiro a versão anterior deste orçamento.'};
+  var restored=clone(q);delete restored.excluidoEm;
+  S.orcamentos.push(restored);S.orcamentosExcluidos=trash.filter(function(x){return x.id!==id});
+  return {restored:restored};
+}
+function showQuoteTrash(){
+  var rows=S.orcamentosExcluidos||[];
+  openModal({title:'Orçamentos excluídos',body:'<p class="muted small">Os orçamentos excluídos ficam aqui para recuperação. Restaurar mantém os dados e a versão da proposta.</p>'+rows.map(function(q){return '<div class="row"><div><b>'+esc(q.titulo||'Sem título')+'</b><p class="muted small">'+esc(nomeQ(q))+' · excluído em '+fd(q.excluidoEm)+'</p></div><button class="btn btn-sm" data-act="restoreQuote" data-id="'+q.id+'">Restaurar</button></div>'}).join('')+(!rows.length?'<p>Nenhum orçamento excluído.</p>':'')});
+}
 function obra(id){return S.obras.find(function(o){return o.id===id})}
 function nomeQ(q){var c=q.clienteId&&cliente(q.clienteId);return c?c.nome:(q.contato&&q.contato.nome)||'Sem nome'}
 function validaAte(q){return addDays(q.enviadoEm||q.criadoEm,n(q.validade)||15)}
@@ -611,8 +656,8 @@ function aprovar(q,o){
   var paid=Math.round(cd.preco*100)/100;
   var cli=q.clienteId&&cliente(q.clienteId);
   if(!cli){var nm=String((q.contato&&q.contato.nome)||'').trim().toLowerCase();cli=nm?S.clientes.find(function(c){return String(c.nome||'').trim().toLowerCase()===nm}):null;if(cli)q.clienteId=cli.id}
-  if(!cli){cli={id:uid(),nome:q.contato.nome||'Cliente sem nome',telefone:q.contato.telefone||'',email:'',endereco:'',obs:'',criadoEm:o.data};S.clientes.push(cli);q.clienteId=cli.id}
-  var ob={id:uid(),quoteId:q.id,clienteId:cli.id,titulo:proposal.titulo,etapa:0,valor:paid,custo:c.custo,sobra:cd.sobra,
+  if(!cli){cli={id:uid(),nome:q.contato.nome||'Cliente sem nome',telefone:q.contato.telefone||'',email:q.contato.email||'',endereco:q.contato.endereco||'',obs:'',criadoEm:o.data};S.clientes.push(cli);q.clienteId=cli.id}
+  var ob={id:uid(),quoteId:q.id,clienteId:cli.id,titulo:proposal.titulo,endereco:proposal.endereco||q.contato.endereco||'',etapa:0,valor:paid,custo:c.custo,sobra:cd.sobra,
     imp:c.imp,rt:c.rt,taxa:n(f.taxa)/100,terceirosFrete:c.terceiros+c.frete,materialPrev:c.material,horasPrev:c.horas,custoHora:c.custoHora,maoObraPrev:c.maoObra,
     formaNome:f.nome,entrega:o.entrega,criadoEm:o.data,entregueEm:null,posVenda:null,posVendaFeito:false,realizado:{material:'',horas:'',extras:'',fechado:false}};
   if(c.labor&&c.labor.rateioModo==='dias'){ob.rateioDiaPrev=c.labor.rateio;ob.horaDireta=c.horas?c.labor.direta/c.horas:0}
@@ -817,9 +862,9 @@ function vOrcamentos(){
     if(precoMudou(q))quando+=' · <span style="color:var(--warn);font-weight:600">preço mudou</span>';
     var valor=quotePrice(q);
     var aberto=(q.status==='rascunho'||q.status==='enviado')&&!approvedRevision(q);
-    return '<div class="qrow" data-act="viewQuote" data-id="'+q.id+'" tabindex="0" role="button"><div><div class="t">'+esc(q.titulo||'Sem título')+'</div><div class="muted small">'+esc(nomeQ(q))+' · '+quando+'</div></div><span class="r">'+brl0(valor)+'</span><span>'+pill(q.status)+'</span><div class="qact"><button class="btn btn-sm" data-act="viewQuote" data-id="'+q.id+'">Ver</button>'+(aberto?'<button class="btn btn-sm btn-primary" data-act="approveQuote" data-id="'+q.id+'">Aprovar</button>':'')+'</div></div>'}).join('');
+    return '<div class="qrow" data-act="viewQuote" data-id="'+q.id+'" tabindex="0" role="button"><div><div class="t">'+esc(q.titulo||'Sem título')+'</div><div class="muted small">'+esc(nomeQ(q))+' · '+quando+'</div></div><span class="r">'+brl0(valor)+'</span><span>'+pill(q.status)+'</span><div class="qact"><button class="btn btn-sm" data-act="viewQuote" data-id="'+q.id+'">Ver</button>'+(q.status!=='aprovado'&&!approvedRevision(q)?'<button class="btn btn-sm" data-act="editQuote" data-id="'+q.id+'">Editar</button>':'')+(aberto?'<button class="btn btn-sm btn-primary" data-act="approveQuote" data-id="'+q.id+'">Aprovar</button>':'')+'</div></div>'}).join('');
   var label={todos:'Todos os orçamentos',rascunho:'Rascunhos',enviado:'Enviados, aguardando resposta',aprovado:'Aprovados',perdido:'Perdidos'}[ui.qFilter];
-  return '<div class="page-head"><div><h1>Orçamentos</h1><p>Toque em um status para filtrar. Quem aprova vira cliente.</p></div><div class="actions"><button class="btn" data-act="mobcloudImport">Importar projeto</button><button class="btn btn-primary" data-act="newQuote"><span class="plus">+</span>Novo orçamento</button></div></div>'+
+  return '<div class="page-head"><div><h1>Orçamentos</h1><p>Crie, edite e acompanhe as propostas dos seus clientes.</p></div><div class="actions">'+((S.orcamentosExcluidos||[]).length?'<button class="btn" data-act="quoteTrash">Lixeira ('+S.orcamentosExcluidos.length+')</button>':'')+'<button class="btn" data-act="mobcloudImport">Importar projeto</button><button class="btn btn-primary" data-act="newQuote"><span class="plus">+</span>Novo orçamento</button></div></div>'+
   '<div class="tiles">'+
    ft('rascunho','Rascunhos',ras.length,'ainda não enviados','')+
    ft('enviado','Enviados',env.length,brl0(tot(env))+' aguardando resposta','blue')+
@@ -1420,7 +1465,16 @@ function confirmProjectPieces(){
   var source={name:current.source.name,format:current.source.format,pieces:rows.map(function(r){return pieceRecord({nome:r.nome,qtd:r.qtd,c:r.c,l:r.l,material:r.material,unidade:'mm'},'alta','Conferido')})};
   mobcloudPreview(projectMaterials(source));
 }
+function importedDraftBase(){return ui.importDraft?clone(ui.importDraft):newDraft()}
+function startProjectImport(d){
+  if(readOnly)return;
+  ui.importDraft=d?clone(d):null;ui.mobcloud=null;ui.projectImport=null;
+  openModal({title:'Importar projeto',body:'<div class="field"><label for="mobcloud-file">Arquivo do projetista</label><input class="in" id="mobcloud-file" type="file" accept=".pdf,.dxf,.csv,.txt,.xml" multiple></div>'+
+    (d?'<p class="muted small">Os materiais serão importados para este orçamento. Cliente, endereço e condições de pagamento serão mantidos. Confira antes de substituir os materiais atuais.</p>':'')+
+    '<p class="muted small" id="mobcloud-status" role="status">PDF, DXF, CSV, TXT ou XML. Para combinar orçamento e plano de corte Mobcloud, selecione os dois PDFs juntos.</p>'});
+}
 function openImportedDraft(d){
+  ui.importDraft=null;location.hash='#orcamentos';
   ui.step=1;ui.draft=d;ui.quoteId=d.id;ui.qFilter='todos';
   closeModal();autoSaveDraft();render();live();window.scrollTo(0,0);
 }
@@ -1471,9 +1525,9 @@ function mobcloudPreview(report){
       '<p class="muted small">Associe cada material ao catálogo do Bancada. Cadastre os equivalentes que faltarem em Ajustes.</p>'+
       report.chapas.map(function(row,i){return options('chapas',row,i)}).join('')+report.fitas.map(function(row,i){return options('fitas',row,i)}).join('')+
       report.itens.map(function(row,i){return options('itens',row,i)}).join('')+
-      '<label class="chk"><input type="checkbox" id="mob-estimate" checked> Sugerir horas de oficina e instalação pelas chapas</label>'+
+      '<label class="chk"><input type="checkbox" id="mob-estimate"'+(ui.importDraft&&(n(ui.importDraft.horasOficina)||n(ui.importDraft.horasInstalacao))?'':' checked')+'> Sugerir horas de oficina e instalação pelas chapas</label>'+
       '<p class="muted small">Confira ferragens, insumos e eventuais serviços terceirizados no rascunho.</p>',
-    foot:'<button class="btn" data-act="mobcloudCatalog">Abrir catálogo</button><button class="btn btn-primary" data-act="mobcloudApply">Criar rascunho</button>'});
+    foot:'<button class="btn" data-act="mobcloudCatalog">Abrir catálogo</button><button class="btn btn-primary" data-act="mobcloudApply">'+(ui.importDraft?'Importar para este orçamento':'Criar rascunho')+'</button>'});
 }
 async function openMobcloudFile(input){
   var files=Array.from(input.files),status=$('#mobcloud-status');
@@ -1495,7 +1549,7 @@ async function openMobcloudFile(input){
 }
 function applyMobcloud(){
   var data=ui.mobcloud;if(!data||readOnly)return;
-  var d=newDraft(),mapped={},skipped=0;
+  var d=importedDraftBase(),mapped={},skipped=0;
   for(var type of ['chapas','fitas','itens']){
     var catalog=S.config[type==='itens'?'materiais':type],matches=new Map();
     for(var i=0;i<data[type].length;i++){
@@ -1515,7 +1569,8 @@ function applyMobcloud(){
   }
   S.config.mobcloudMap=Object.assign({},S.config.mobcloudMap,mapped);
   var estimate=$('#mob-estimate').checked;
-  d.titulo=data.arquivo?data.arquivo.replace(/\.[^.]+$/,''):'Projeto Mobcloud '+data.id;
+  if(!String(d.titulo||'').trim())d.titulo=data.arquivo?data.arquivo.replace(/\.[^.]+$/,''):'Projeto Mobcloud '+data.id;
+  delete d.mobcloud;delete d.importacaoMateriais;delete d.pecasImportadas;delete d.origemPecas;
   if(!data.origem)d.mobcloud={id:data.id,tipo:data.tipo,estimarHoras:estimate,componentes:data.itens.length,omitidos:skipped};
   else d.importacaoMateriais={arquivo:data.arquivo,formato:data.origem};
   if(estimate){var hours=sugHoras(d);d.horasOficina=hours.of;d.horasInstalacao=hours.inst}
@@ -1529,9 +1584,11 @@ function viewQuote(id){
   normQ(q);var nItens=(q.itens||[]).filter(function(r){return n(r.qtd)>0}).length;
   var info=q.status==='enviado'?'Enviado em '+fd(q.enviadoEm)+' · válido até '+fd(validaAte(q)):q.status==='rascunho'?'Rascunho criado em '+fd(q.criadoEm):q.status==='aprovado'?'Aprovado em '+fd(q.aprovadoEm):'Perdido por '+esc((q.motivoPerda||'—').toLowerCase());
   var foot=[quoteActions(q)];
+  if(q.status!=='aprovado'&&!approvedRevision(q))foot.push('<button class="btn" data-act="editQuote" data-id="'+id+'">Editar</button>');
+  if(!quoteDeleteReason(q))foot.push('<button class="btn btn-ghost" data-act="deleteQuote" data-id="'+id+'">Excluir orçamento</button>');
   if((q.status==='rascunho'||q.status==='enviado')&&!approvedRevision(q)){
     foot.push('<button class="btn btn-ghost" data-act="loseQuote" data-id="'+id+'" style="margin-right:auto">Perdido</button>');
-    if(q.status==='rascunho')foot.push('<button class="btn" data-act="openQuote" data-id="'+id+'">Editar</button>');
+
     foot.push('<button class="btn" data-act="showProposal" data-id="'+id+'">Proposta</button>');
     if(q.status==='rascunho')foot.push('<button class="btn btn-brown" data-act="sendQuote" data-id="'+id+'">Marcar como enviado</button>');
     foot.push('<button class="btn btn-primary" data-act="approveQuote" data-id="'+id+'">Aprovar</button>');
@@ -1557,7 +1614,7 @@ function viewQuote(id){
 
 function newDraft(clienteId){
   var C=S.config;var cl=clienteId&&cliente(clienteId);
-  return {id:uid(),numero:null,clienteId:cl?cl.id:null,contato:{nome:cl?cl.nome:'',telefone:cl?cl.telefone:''},titulo:'',status:'rascunho',criadoEm:today(),enviadoEm:null,
+  return {id:uid(),numero:null,clienteId:cl?cl.id:null,contato:clientContact(cl),titulo:'',status:'rascunho',criadoEm:today(),enviadoEm:null,
     chapas:[{id:C.chapas[0]?C.chapas[0].id:'',qtd:1}],fitas:C.fitas[0]?[{id:C.fitas[0].id,qtd:1}]:[],itens:[],outros:0,horasOficina:0,horasInstalacao:0,pessoas:C.pessoasProjeto||2,terceiros:0,frete:0,
     reservaPct:C.reserva,rtNome:'',rtPct:0,respostas:{},margemManual:'',entradaPct:30,entradaParcelas:5,condicoes:(function(){var w=['pix','entrada','cred10'].filter(function(id){return forma(id)});return w.length?w:C.formas.slice(0,3).map(function(f){return f.id})})(),validade:C.validade,obs:'',motivoPerda:'',retomarEm:'',precoSalvo:0};
 }
@@ -1621,7 +1678,8 @@ function vEditor(){
     '<div class="field"><label for="ed-clienteId">Já é cliente?</label><select class="in" id="ed-clienteId" data-f="clienteId">'+cOpts.map(function(o){return '<option value="'+o[0]+'"'+(String(d.clienteId||'')===o[0]?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select></div>'+
     '<div class="fgrid"><div class="field"><label for="ed-contato-nome">Nome</label><input class="in" id="ed-contato-nome" data-f="contato.nome" value="'+esc(d.contato.nome)+'"'+(d.clienteId?' readonly':'')+'></div>'+
     '<div class="field"><label for="ed-contato-telefone">WhatsApp</label><input class="in" id="ed-contato-telefone" data-f="contato.telefone" value="'+esc(d.contato.telefone)+'"'+(d.clienteId?' readonly':'')+'></div></div>'+
-    '<div id="dup-hint"></div><div class="field"><label for="ed-titulo">Nome do projeto</label><input class="in" id="ed-titulo" data-f="titulo" placeholder="Ex.: Cozinha planejada com ilha" value="'+esc(d.titulo)+'"></div></div>';
+    '<div class="fgrid"><div class="field"><label for="ed-contato-email">E-mail</label><input class="in" type="email" id="ed-contato-email" data-f="contato.email" value="'+esc(d.contato.email||'')+'"></div><div class="field"><label for="ed-contato-endereco">Endereço de instalação</label><input class="in" id="ed-contato-endereco" data-f="contato.endereco" value="'+esc(d.contato.endereco||'')+'" placeholder="Rua, número, bairro, cidade e CEP"></div></div>'+
+    '<div id="dup-hint"></div><div class="field"><label for="ed-titulo">Nome do projeto</label><input class="in" id="ed-titulo" data-f="titulo" placeholder="Ex.: Cozinha planejada com ilha" value="'+esc(d.titulo)+'"></div><div class="actions"><button class="btn" data-act="importIntoDraft">Importar materiais do projeto</button></div><p class="muted small">Preencha o cliente e importe o arquivo neste mesmo orçamento.</p></div>';
   }else if(st===1){
     var chRows=(d.chapas||[]).map(function(r,i){
       var missing=r.id&&!C.chapas.some(function(m){return m.id===r.id})?'<option selected disabled>Selecione uma chapa do catálogo</option>':'';
@@ -1630,7 +1688,7 @@ function vEditor(){
     var fRows=(d.fitas||[]).map(function(r,i){return '<div class="rowform"><select class="in" data-row="fitas" data-i="'+i+'" data-k="id" aria-label="Fita de borda">'+C.fitas.map(function(f){return '<option value="'+f.id+'"'+(f.id===r.id?' selected':'')+'>'+esc(f.nome)+' · rolo de '+dec(f.metros,0)+' m — '+brl(f.preco)+'</option>'}).join('')+'</select><input class="in r" type="number" step="1" min="0" data-row="fitas" data-i="'+i+'" data-k="qtd" value="'+esc(r.qtd)+'" aria-label="Quantidade de rolos"><span class="sub" data-sub="fitas" data-i="'+i+'"></span><button class="icon-btn" data-act="delRow" data-row="fitas" data-i="'+i+'" aria-label="Remover fita">×</button></div>'}).join('');
     var iRows=(d.itens||[]).map(function(r,i){return '<div class="rowform"><select class="in" data-row="itens" data-i="'+i+'" data-k="id" aria-label="Material">'+matOpts(r.id)+'</select><input class="in r" type="number" step="any" min="0" data-row="itens" data-i="'+i+'" data-k="qtd" value="'+esc(r.qtd)+'" aria-label="Quantidade"><span class="sub" data-sub="itens" data-i="'+i+'"></span><button class="icon-btn" data-act="delRow" data-row="itens" data-i="'+i+'" aria-label="Remover item">×</button></div>'}).join('');
     var head='<div class="rowform head"><span>Material</span><span style="text-align:right">Qtd.</span><span style="text-align:right">Subtotal</span><span></span></div>';
-    sec=(d.mobcloud?'<div class="sec"><p class="muted small">Projeto Mobcloud '+esc(d.mobcloud.id)+(d.mobcloud.pecas==null?'':' · '+esc(d.mobcloud.pecas)+' peças')+'. Confira ferragens e insumos antes de calcular.'+
+    sec='<div class="sec"><button class="btn" data-act="importIntoDraft">Importar materiais do projeto</button></div>'+(d.mobcloud?'<div class="sec"><p class="muted small">Projeto Mobcloud '+esc(d.mobcloud.id)+(d.mobcloud.pecas==null?'':' · '+esc(d.mobcloud.pecas)+' peças')+'. Confira ferragens e insumos antes de calcular.'+
       (d.mobcloud.omitidos?' '+esc(d.mobcloud.omitidos)+' componentes do PDF ficaram fora do rascunho.':'')+'</p></div>':'')+
     '<div class="sec"><div class="sec-h"><h2>Chapas</h2><span class="muted">Quantas chapas inteiras vão ser compradas</span></div><div class="rows">'+head+chRows+'</div><button class="btn btn-sm add" data-act="addRow" data-row="chapas">+ Adicionar chapa</button></div>'+
     '<div class="sec"><div class="sec-h"><h2>Fita de borda</h2><span class="muted">Cobrada pelo rolo inteiro</span></div><div class="rows">'+(fRows?head.replace('Material','Fita').replace('Qtd.','Rolos')+fRows:'<span class="muted small">Nenhuma fita adicionada.</span>')+'</div><p class="muted small" id="fita-hint" style="margin:8px 0 0"></p><button class="btn btn-sm add" data-act="addRow" data-row="fitas">+ Adicionar fita</button></div>'+
@@ -1669,7 +1727,7 @@ function vEditor(){
   }
   var stepper='<ol class="stepper" aria-label="Etapas do orçamento">'+STEPS.map(function(s,i){return '<li><button data-act="step" data-s="'+i+'" class="'+(i===st?'on':i<st?'done':'')+'"'+(i===st?' aria-current="step"':'')+'><span class="sn">'+(i+1)+'</span>'+s+'</button></li>'}).join('')+'</ol>';
   var nav='<div class="step-nav">'+(st>0?'<button class="btn" data-act="step" data-s="'+(st-1)+'">← '+STEPS[st-1]+'</button>':'<span></span>')+(st<5?'<button class="btn btn-primary" data-act="step" data-s="'+(st+1)+'">Próximo: '+STEPS[st+1]+' →</button>':'')+'</div>';
-  var head='<div class="page-head"><div><button class="btn btn-sm btn-ghost" data-act="backQuotes" style="margin:0 0 6px -10px">← Orçamentos</button><h1>'+esc(d.titulo||'Novo orçamento')+'</h1><p><span id="draft-status">'+(isNew?'Salvo automaticamente ao editar':'Criado em '+fd(d.criadoEm))+'</span> · '+pill(d.status)+'</p></div><div class="actions">'+(!locked?'<button class="btn" data-act="saveQuote">Salvar</button>':'')+'</div></div>';
+  var head='<div class="page-head"><div><button class="btn btn-sm btn-ghost" data-act="backQuotes" style="margin:0 0 6px -10px">← Orçamentos</button><h1>'+esc(d.titulo||'Novo orçamento')+'</h1><p><span id="draft-status">'+(isNew?'Salvo automaticamente ao editar':'Criado em '+fd(d.criadoEm))+'</span> · '+pill(d.status)+'</p></div><div class="actions">'+(!locked?'<button class="btn" data-act="saveQuote">Salvar</button>'+(!quoteDeleteReason(d)?'<button class="btn btn-ghost" data-act="deleteQuote" data-id="'+d.id+'">Excluir orçamento</button>':''):'')+'</div></div>';
   if(st===5)return head+stepper+'<div id="review">'+reviewHTML(d)+'</div>'+nav;
   return head+stepper+'<div class="editor"><div class="card" id="ed-form">'+sec+nav.replace('step-nav','step-nav sec')+'</div><aside class="summary" id="summary"></aside></div>';
 }
@@ -1809,7 +1867,7 @@ function onEditorInput(e){
     d.entregas[+t.dataset.delivery][t.dataset.key]=t.value;
   }else if(t.dataset.f){
     var f=t.dataset.f;
-    if(f==='clienteId'){d.clienteId=t.value||null;var cl=cliente(t.value);d.contato=cl?{nome:cl.nome,telefone:cl.telefone}:{nome:'',telefone:''};rerenderEditor();return}
+    if(f==='clienteId'){d.clienteId=t.value||null;var cl=cliente(t.value);d.contato=clientContact(cl);rerenderEditor();return}
     var v=t.type==='checkbox'?t.checked:t.type==='number'?(t.value===''?'':n(t.value)):t.value;
     setPath(d,f,v);
     if(f==='rateioModo'||/^maoLancamentos\.\d+\.pessoa$/.test(f)){rerenderEditor();var control=document.getElementById(t.id);if(control)control.focus();return}
@@ -1846,7 +1904,7 @@ function copyQuote(id,revision){
   ['proposta','obraId','aprovadoEm','perdidoEm','motivoPerda','retomarEm','revisaoRaiz','revisaoDe'].forEach(function(k){delete d[k]});
   Object.assign(d,{id:uid(),numero:null,status:'rascunho',criadoEm:today(),enviadoEm:null});
   if(revision){d.revisaoRaiz=source.revisaoRaiz||source.id;d.revisaoDe=source.id}
-  else{d.clienteId=null;d.contato={nome:'',telefone:''};d.titulo=(source.titulo||'Orçamento')+' (cópia)'}
+  else{d.clienteId=null;d.contato=clientContact(null);d.titulo=(source.titulo||'Orçamento')+' (cópia)'}
   closeModal();ui.step=0;ui.draft=d;ui.quoteId=d.id;ui.qFilter='todos';autoSaveDraft();
   location.hash='#orcamentos';render();live();window.scrollTo(0,0);
 }
@@ -1898,7 +1956,7 @@ function proposalData(q,emissao){
   if(priced&&sum!==Math.round(reference.preco*100))return {error:'A soma dos itens ('+brl(sum/100)+') deve bater com o total em '+reference.forma.nome+' ('+brl(reference.preco)+').'};
   var calc=Object.assign({},c);delete calc.q;delete calc.ajustes;
   return {emissao:emissao,valida:validaAte(Object.assign({},q,{enviadoEm:emissao})),validade:n(q.validade)||15,
-    titulo:q.titulo||'Móveis sob medida',cliente:nomeQ(q),telefoneCliente:q.contato&&q.contato.telefone||'',
+    titulo:q.titulo||'Móveis sob medida',cliente:nomeQ(q),telefoneCliente:q.contato&&q.contato.telefone||'',endereco:q.contato&&q.contato.endereco||'',
     oficina:C.nomeOficina||'Marcenaria',telefoneOficina:C.telefone||'',descricao:descricao,obs:q.obs||'',
     rtNome:q.rtNome||'',instalacao:c.labor.instalacao>0,
     prazo:prazo||null,prazoUnidade:unit,pessoas:pessoasDe(q),calc:calc,condicoes:conds,
@@ -1912,7 +1970,7 @@ function proposalHTML(q){
   var ofi=esc(p.oficina);
   return '<article class="prop-sheet">'+
    '<header class="prop-top"><div><b class="prop-of">'+ofi+'</b>'+(p.telefoneOficina?'<span>'+esc(p.telefoneOficina)+'</span>':'')+'</div><div class="prop-meta"><span class="prop-kind">Proposta</span><span>'+fd(p.emissao)+'</span></div></header>'+
-   '<section class="prop-hero"><p class="prop-cli">Para '+esc(p.cliente)+(p.telefoneCliente?' · '+esc(p.telefoneCliente):'')+'</p><h1>'+esc(p.titulo)+'</h1>'+(p.descricao?'<p class="prop-desc">'+esc(p.descricao)+'</p>':'')+'</section>'+
+   '<section class="prop-hero"><p class="prop-cli">Para '+esc(p.cliente)+(p.telefoneCliente?' · '+esc(p.telefoneCliente):'')+'</p>'+(p.endereco?'<p class="prop-cli">Endereço: '+esc(p.endereco)+'</p>':'')+'<h1>'+esc(p.titulo)+'</h1>'+(p.descricao?'<p class="prop-desc">'+esc(p.descricao)+'</p>':'')+'</section>'+
    '<section class="prop-facts"><div><span>Prazo de execução</span><b>'+(p.prazo?esc(p.prazo+' dias '+(p.prazoUnidade||'úteis')):'A confirmar')+'</b><small>a partir da aprovação do projeto final</small></div><div><span>Proposta válida até</span><b>'+fd(p.valida)+'</b><small>'+p.validade+' dias a partir da emissão</small></div></section>'+
    ((p.itens||[]).length?'<section><h2>Entregas por item</h2>'+(p.referencia?'<p class="small muted">Valores em '+esc(p.referencia)+'.</p>':'')+
      '<table class="prop-tbl">'+p.itens.map(function(item){return '<tr><td>'+esc(item.nome)+(item.descricao?'<small>'+esc(item.descricao)+'</small>':'')+'</td>'+
@@ -1940,22 +1998,25 @@ function proposalText(d){
 }
 
 /* ---------- Clientes ---------- */
+function newClientModal(){
+  openModal({title:'Cadastrar cliente',body:'<div class="fgrid">'+field('Nome','cl-nome','')+field('WhatsApp','cl-tel','')+field('E-mail','cl-email','')+'</div>'+field('Endereço completo','cl-end','',{ph:'Rua, número, bairro, cidade e CEP'})+field('Observações','cl-obs','',{type:'textarea'}),foot:'<button class="btn" data-act="closeModal">Cancelar</button><button class="btn btn-primary" data-act="saveCliente">Cadastrar cliente</button>'});
+}
 function vClientes(){
   var s=ui.cSearch.trim().toLowerCase();var t=today();
-  var list=S.clientes.filter(function(c){return !s||(c.nome+' '+c.telefone).toLowerCase().indexOf(s)>=0}).sort(function(a,b){return a.nome.localeCompare(b.nome)});
-  var head='<div class="page-head"><div><h1>Clientes</h1><p>Quem fechou ao menos um orçamento. Histórico e valores.</p></div><input class="in search" id="c-search" type="search" placeholder="Buscar cliente" value="'+esc(ui.cSearch)+'" aria-label="Buscar clientes"></div>';
+  var list=S.clientes.filter(function(c){return !s||(c.nome+' '+c.telefone+' '+(c.email||'')+' '+(c.endereco||'')).toLowerCase().indexOf(s)>=0}).sort(function(a,b){return a.nome.localeCompare(b.nome)});
+  var head='<div class="page-head"><div><h1>Clientes</h1><p>Cadastre seus clientes e acompanhe os históricos, mesmo antes de um orçamento.</p></div><div class="actions"><button class="btn btn-primary" data-act="newCliente">Cadastrar cliente</button><input class="in search" id="c-search" type="search" placeholder="Buscar cliente" value="'+esc(ui.cSearch)+'" aria-label="Buscar clientes"></div></div>';
   function card(c){
     var obs=S.obras.filter(function(o){return o.clienteId===c.id});
     var total=obs.reduce(function(a,o){return a+o.valor},0);
     var aberto=S.receber.filter(function(r){return r.clienteId===c.id&&r.status!=='recebido'}).reduce(function(a,r){return a+r.bruto},0);
     var atr=S.receber.some(function(r){return r.clienteId===c.id&&recStatus(r)==='atrasado'});
     var emAnd=obs.filter(function(o){return o.etapa<4});
-    var st=emAnd.length?pill('brown',ETAPAS[emAnd[0].etapa]+(emAnd.length>1?' +'+(emAnd.length-1):'')):aberto>0.5?pill('enviado','Pagando'):pill('ok','Finalizado');
+    var st=!obs.length?pill('rascunho','Sem projetos'):emAnd.length?pill('brown',ETAPAS[emAnd[0].etapa]+(emAnd.length>1?' +'+(emAnd.length-1):'')):aberto>0.5?pill('enviado','Pagando'):pill('ok','Finalizado');
     return '<button class="ccard" data-act="openCliente" data-id="'+c.id+'"><span class="t">'+esc(c.nome)+'</span><span class="muted small">'+esc(c.telefone||'Sem telefone')+'</span><span class="m"><span>'+obs.length+' projeto'+(obs.length===1?'':'s')+'</span><b>'+brl0(total)+'</b></span><span class="m"><span>Em aberto</span><b>'+brl0(aberto)+'</b></span><span class="pills" style="justify-content:flex-start">'+st+(atr?pill('bad','Parcela atrasada'):'')+'</span></button>'}
   function ativo(c){return S.obras.some(function(o){return o.clienteId===c.id&&o.etapa<4})||S.receber.some(function(r){return r.clienteId===c.id&&r.status!=='recebido'})}
-  var at=list.filter(ativo),fin=list.filter(function(c){return !ativo(c)});
+  var at=list.filter(ativo),pending=list.filter(function(c){return !S.obras.some(function(o){return o.clienteId===c.id})&&!ativo(c)}),fin=list.filter(function(c){return !ativo(c)&&S.obras.some(function(o){return o.clienteId===c.id})});
   function sec(t,sub,arr,empty){return '<div class="csec"><div class="csec-h"><h2>'+t+'</h2><span class="cnt">'+arr.length+'</span><span class="muted small">'+sub+'</span></div>'+(arr.length?'<div class="cards">'+arr.map(card).join('')+'</div>':'<p class="muted small">'+empty+'</p>')+'</div>'}
-  return head+(list.length?sec('Ativos','projeto em andamento ou parcelas a receber',at,'Nenhum cliente ativo agora.')+sec('Finalizados','tudo entregue e pago',fin,'Ninguém finalizado ainda.'):'<div class="card"><div class="list"><div class="empty">Nenhum cliente ainda. Quando um orçamento é aprovado, o contato vira cliente aqui.</div></div></div>');
+  return head+(list.length?sec('Ativos','projeto em andamento ou parcelas a receber',at,'Nenhum cliente ativo agora.')+sec('Sem projetos','cadastros disponíveis para novos orçamentos',pending,'Nenhum cadastro sem projeto.')+sec('Finalizados','tudo entregue e pago',fin,'Ninguém finalizado ainda.'):'<div class="card"><div class="list"><div class="empty">Nenhum cliente cadastrado. Use Cadastrar cliente para começar, mesmo sem orçamento.</div></div></div>');
 }
 function openCliente(id){
   var c=cliente(id);if(!c)return;
@@ -2028,7 +2089,7 @@ function openObra(id){
     '<div class="hr"></div><h3>Gasto de verdade</h3><p class="muted small">Pedido na hora de entregar. Com isso o sistema calcula o lucro real e quanto o projeto rendeu por dia de trabalho.</p>'+
     '<div class="fgrid">'+field('Material gasto (R$) · previsto '+brl0(o.materialPrev),'ob-mat',r.material,{type:'number',step:'any'})+field('Horas reais · previsto '+dec(o.horasPrev,0)+' h','ob-hor',r.horas,{type:'number',step:'any'})+field('Gastos extras (R$)','ob-ext',r.extras,{type:'number',step:'any'})+'</div>'+
     '<div class="hr"></div><div class="cx-project-head"><h3>Caixinhas do projeto</h3><button class="btn btn-sm" data-act="cxGo" data-id="'+o.id+'">Abrir em Caixinhas</button></div>'+cxTable(cxProject(o))+
-    '<div class="hr"></div><h3>Recebimentos</h3><div class="scroll"><table class="tbl"><thead><tr><th>Parcela</th><th>Vencimento</th><th class="r">Valor</th><th>Situação</th></tr></thead><tbody>'+recs.map(function(x){var st=recStatus(x);return '<tr><td>'+esc(x.desc.split(' — ')[0])+'</td><td>'+fd(x.venc)+'</td><td class="r">'+brl(x.bruto)+'</td><td>'+pill(st==='recebido'?'ok':st==='atrasado'?'bad':'enviado',st==='recebido'?'Recebido':st==='atrasado'?'Atrasado':'Pendente')+'</td></tr>'}).join('')+'</tbody></table></div>',
+    '<div class="hr"></div><h3>Recebimentos</h3><div class="scroll"><table class="tbl"><thead><tr><th>Parcela</th><th>Vencimento</th><th class="r">Valor</th><th>Situação</th></tr></thead><tbody>'+recs.map(function(x){var st=recStatus(x);return '<tr><td>'+esc(String(x.desc||'Recebimento').split(' — ')[0])+'</td><td>'+fd(x.venc)+'</td><td class="r">'+brl(x.bruto)+'</td><td>'+pill(st==='recebido'?'ok':st==='atrasado'?'bad':'enviado',st==='recebido'?'Recebido':st==='atrasado'?'Atrasado':'Pendente')+'</td></tr>'}).join('')+'</tbody></table></div>',
     foot:'<button class="btn btn-primary" data-act="saveObra" data-id="'+id+'">Salvar</button>'});
 }
 
@@ -2069,9 +2130,9 @@ function ensureFixedBills(month){
 }
 function configureFixedBills(){
   var costs=S.config.custosFixos.filter(function(f){return String(f.nome||'').trim()&&n(f.valor)>0});
-  if(!costs.length){openModal({title:'Contas fixas mensais',body:'<p>Cadastre primeiro os valores em Ajustes → Oficina → Custos fixos do mês.</p>',foot:'<button class="btn btn-primary" data-act="openFixedCosts">Cadastrar custos fixos</button>'});return}
+  if(!costs.length){openModal({title:'Contas fixas mensais',body:'<p>Cadastre primeiro os valores em Ajustes → Custos fixos e variáveis.</p>',foot:'<button class="btn btn-primary" data-act="openFixedCosts">Cadastrar custos fixos</button>'});return}
   openModal({title:'Programar contas fixas mensais',body:
-    '<p>Escolha quais despesas devem entrar no A pagar todos os meses e informe o vencimento. Os valores vêm dos custos fixos salvos em Ajustes.</p>'+
+    '<p>Escolha quais despesas devem entrar no A pagar todos os meses e informe o vencimento. Os valores vêm das despesas mensais salvas em Ajustes.</p>'+
     '<div class="field"><label for="fixed-start">Primeiro mês dos novos agendamentos</label><input class="in" type="month" id="fixed-start" value="'+mesAtual()+'"></div>'+
     costs.map(function(f,i){return '<div class="sec"><label class="chk"><input type="checkbox" id="fixed-on-'+i+'" data-fixed="'+esc(f.id)+'"'+(f.lancarMensal?' checked':'')+'> '+esc(f.nome)+' · '+brl(f.valor)+'/mês</label><div class="field"><label for="fixed-day-'+i+'">Dia do vencimento de '+esc(f.nome)+'</label><input class="in" type="number" min="1" max="31" step="1" id="fixed-day-'+i+'" value="'+esc(f.diaMensal||5)+'"></div></div>'}).join('')+
     '<p class="muted small">Dias 29 a 31 são ajustados ao último dia dos meses menores. Contas já lançadas são mantidas, inclusive as pagas. Desmarcar uma despesa interrompe novos lançamentos. Contas manuais com mesmo nome e mês são aproveitadas, preservando o valor já registrado, quando há uma única correspondência.</p><p id="fixed-error" role="status"></p>',
@@ -2148,16 +2209,66 @@ function niceMax(v){if(v<=0)return 1000;var st=v/4;var p=Math.pow(10,Math.floor(
 function barPath(x,y,w,h,r){if(h<=0)return '';r=Math.min(r,w/2,h);return 'M'+x+','+(y+h)+'V'+(y+r)+'Q'+x+','+y+' '+(x+r)+','+y+'H'+(x+w-r)+'Q'+(x+w)+','+y+' '+(x+w)+','+(y+r)+'V'+(y+h)+'Z'}
 function inPer(d){if(!d)return false;return ui.dPer==='mes'?d.slice(0,7)===ui.dRef:d.slice(0,4)===ui.dRef.slice(0,4)}
 function dGeral(){
-  ui.dPer='mes';
-  var month=ui.dRef||mesAtual(),label=MESES_LONG[+month.slice(5,7)-1]+' de '+month.slice(0,4);
-  var received=S.receber.filter(function(r){return r.status==='recebido'&&cxInMonth(r.recebidoEm,month)}).reduce(function(sum,r){return sum+n(r.liquido)},0);
-  var paid=S.pagar.filter(function(p){return p.status==='pago'&&cxInMonth(p.pagoEm,month)}).reduce(function(sum,p){return sum+n(p.valor)},0);
-  var reserve=cxReserve(month,cxMonthly(S.obras.map(cxProject),month));
-  function tile(title,value,description,tone){return '<div class="tile '+(tone||'')+'"><span class="k">'+title+'</span><span class="v">'+brl(value)+'</span><span class="s">'+description+'</span></div>'}
-  return '<div class="dash-bar"><h2>Caixa do mês</h2><div class="period"><button class="icon-btn" data-act="dShift" data-d="-1" aria-label="Mês anterior">‹</button><b>'+esc(label)+'</b><button class="icon-btn" data-act="dShift" data-d="1" aria-label="Próximo mês">›</button></div></div>'+
-    '<div class="tiles">'+tile('Recebido',received,'líquido de taxas')+tile('Pago',paid,'pagamentos registrados')+tile('Saldo do mês',received-paid,'recebido menos pago')+tile('Falta juntar',reserve.gap/100,'para as contas deste mês','hero')+'</div>'+
-    '<div class="card"><div class="sec"><h2>Contas e reserva</h2><p>Total das contas do mês: <b>'+brl(reserve.total/100)+'</b> · Já pago: <b>'+brl(reserve.paid/100)+'</b> · Reserva disponível para o restante: <b>'+brl(reserve.covered/100)+'</b>.</p>'+
-    '<p class="muted small">A reserva considera somente valores já separados nas Caixinhas. O saldo de caixa acima mostra entradas e pagamentos, sem considerar o saldo anterior.</p>'+fixedBillsHint()+'<div class="actions"><button class="btn" data-act="dTab" data-tab="receber">Ver a receber</button><button class="btn" data-act="dTab" data-tab="pagar">Ver a pagar</button><button class="btn btn-primary" data-act="overviewCaixinhas" data-month="'+esc(month)+'">Ver caixinhas do mês</button></div></div></div>';
+  var C=S.config,t=today();
+  var ano=ui.dRef.slice(0,4);
+  var perLabel=ui.dPer==='mes'?MESES_LONG[+ui.dRef.slice(5,7)-1]+' de '+ano:ano;var perTitle=perLabel.charAt(0).toUpperCase()+perLabel.slice(1);
+  var vendidas=S.obras.filter(function(o){return inPer(o.criadoEm)});
+  var rdL=0,rdD=0,rdN=0,rdC=0;S.obras.forEach(function(o){if(!o.entregueEm||!inPer(o.entregueEm))return;var rd=rendeDia(o);if(rd.real==null)return;rdL+=rd.real*rd.diasReal;rdD+=rd.diasReal;rdC+=rd.custoDia*rd.diasReal;rdN++});var rdM=rdD?rdL/rdD:null;
+  var vendido=vendidas.reduce(function(a,o){return a+o.valor},0);
+  var lucroPrev=vendidas.reduce(function(a,o){return a+o.sobra},0);
+  var custoPrev=vendidas.reduce(function(a,o){return a+n(o.custo)},0);
+  var recebido=S.receber.filter(function(r){return r.status==='recebido'&&inPer(r.recebidoEm)}).reduce(function(a,r){return a+r.liquido},0);
+  var pagos=S.pagar.filter(function(p){return p.status==='pago'&&inPer(p.pagoEm)});
+  var pago=pagos.reduce(function(a,p){return a+n(p.valor)},0);
+  var resultado=recebido-pago;
+  var aprov=S.orcamentos.filter(function(q){return q.status==='aprovado'&&inPer(q.aprovadoEm)}).length;
+  var perd=S.orcamentos.filter(function(q){return q.status==='perdido'&&inPer(q.perdidoEm||q.enviadoEm)}).length;
+  var enviados=S.orcamentos.filter(function(q){return inPer(q.enviadoEm)}).length;
+  var emAberto=S.receber.filter(function(r){return r.status!=='recebido'}).reduce(function(a,r){return a+r.liquido},0);
+  var aPagar=S.pagar.filter(function(p){return p.status!=='pago'}).reduce(function(a,p){return a+n(p.valor)},0);
+  /* gráfico anual */
+  var ent=[],sai=[];for(var i=0;i<12;i++){ent.push(0);sai.push(0)}
+  S.receber.forEach(function(r){if(r.status==='recebido'&&r.recebidoEm&&r.recebidoEm.slice(0,4)===ano)ent[+r.recebidoEm.slice(5,7)-1]+=r.liquido});
+  S.pagar.forEach(function(p){if(p.status==='pago'&&p.pagoEm&&p.pagoEm.slice(0,4)===ano)sai[+p.pagoEm.slice(5,7)-1]+=n(p.valor)});
+  var W=720,H=250,pl=58,pr=8,pt=12,pb=28,ch=H-pt-pb,cw=W-pl-pr;
+  var mx=niceMax(Math.max.apply(null,ent.concat(sai)));
+  var gw=cw/12,bw=Math.min(16,gw*0.3);
+  var sel=ui.dPer==='mes'&&ui.dRef.slice(0,4)===ano?+ui.dRef.slice(5,7)-1:-1;
+  var svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Entradas e saídas por mês em '+ano+'">';
+  for(var g=0;g<=4;g++){var y=pt+ch-ch*g/4;svg+='<line x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y+'" y2="'+y+'" stroke="rgba(0,0,0,'+(g?0.06:0.14)+')" stroke-width="1"/><text x="'+(pl-8)+'" y="'+(y+4)+'" text-anchor="end" font-size="11" fill="#6E6E73">'+kfmt(mx*g/4)+'</text>'}
+  for(var m=0;m<12;m++){
+    var cx=pl+gw*m+gw/2;var he=ch*ent[m]/mx,hs=ch*sai[m]/mx;
+    var op=sel<0||sel===m?1:0.35;
+    svg+='<g data-m="'+m+'" style="cursor:default">'+'<rect x="'+(pl+gw*m)+'" y="'+pt+'" width="'+gw+'" height="'+ch+'" fill="transparent"/>'+
+      '<path d="'+barPath(cx-bw-1,pt+ch-he,bw,he,4)+'" fill="#2A5E9A" opacity="'+op+'"/>'+
+      '<path d="'+barPath(cx+1,pt+ch-hs,bw,hs,4)+'" fill="#C08442" opacity="'+op+'"/>'+
+      '<text x="'+cx+'" y="'+(H-8)+'" text-anchor="middle" font-size="11.5" fill="'+(sel===m?'#1D1D1F':'#6E6E73')+'" font-weight="'+(sel===m?'600':'400')+'">'+MESES[m]+'</text></g>';
+  }
+  svg+='</svg>';
+  ui.chartData={ano:ano,ent:ent,sai:sai};
+  /* categorias */
+  var cats={};pagos.forEach(function(p){cats[p.categoria||'Outros']=(cats[p.categoria||'Outros']||0)+n(p.valor)});
+  var ck=Object.keys(cats).sort(function(a,b){return cats[b]-cats[a]});var cmax=ck.length?cats[ck[0]]:1;
+  var catHTML=ck.length?ck.map(function(k){return '<div class="hbar"><span>'+esc(k)+'</span><span class="track"><span class="fill" style="display:block;width:'+Math.max(2,cats[k]/cmax*100)+'%"></span></span><span class="r">'+brl0(cats[k])+'</span></div>'}).join(''):'<p class="muted small">Nenhuma despesa paga neste período.</p>';
+  var obrasRows=vendidas.sort(function(a,b){return b.criadoEm.localeCompare(a.criadoEm)}).map(function(o){var c=cliente(o.clienteId);var lr=lucroReal(o);return '<tr><td><b>'+esc(o.titulo)+'</b><br><span class="muted small">'+esc(c?c.nome:'')+' · '+fds(o.criadoEm)+'</span></td><td class="r">'+brl0(o.valor)+'</td><td class="r">'+brl0(o.sobra)+'</td><td class="r">'+(lr==null?'<span class="muted">em aberto</span>':'<span style="color:var(--'+(lr>=o.sobra?'ok':'bad')+');font-weight:600">'+brl0(lr)+'</span>')+'</td></tr>'}).join('');
+  function tile(k,v,s,tone,color){return '<div class="tile '+(tone||'')+'"><span class="k">'+k+'</span><span class="v"'+(color?' style="color:var(--'+color+')"':'')+'>'+v+'</span><span class="s">'+s+'</span></div>'}
+  return '<div class="dash-bar"><div class="seg">'+[['mes','Mês'],['ano','Ano']].map(function(x){return '<button data-act="dPer" data-p="'+x[0]+'" class="'+(ui.dPer===x[0]?'on':'')+'">'+x[1]+'</button>'}).join('')+'</div><div class="period"><button class="icon-btn" data-act="dShift" data-d="-1" aria-label="Período anterior">‹</button><b>'+perTitle+'</b><button class="icon-btn" data-act="dShift" data-d="1" aria-label="Próximo período">›</button></div></div>'+
+  '<div class="tiles">'+
+   tile('Vendido',brl0(vendido),vendidas.length+' contrato'+(vendidas.length===1?'':'s')+' fechado'+(vendidas.length===1?'':'s'),'hero')+
+   tile('Recebido',brl0(recebido),'líquido de taxas','')+
+   tile('Despesas pagas',brl0(pago),pagos.length+' pagamento'+(pagos.length===1?'':'s'),'brown')+
+   tile('Resultado de caixa',(resultado<0?'−':'')+brl0(Math.abs(resultado)),'recebido menos pago','',resultado>=0?'ok':'bad')+
+  '</div><div class="tiles">'+
+   tile('Custo previsto das vendas',brl0(custoPrev),'custos dos contratos do período','')+
+   tile('Lucro previsto nas vendas',brl0(lucroPrev),vendido?'margem média de '+pct(lucroPrev/vendido*100):'sem vendas no período','')+
+   tile('Ticket médio',vendidas.length?brl0(vendido/vendidas.length):'—','por contrato','')+
+   tile('Taxa de fechamento',(aprov+perd)?pct(aprov/(aprov+perd)*100):'—',enviados+' enviado'+(enviados===1?'':'s')+' · '+aprov+' aprovado'+(aprov===1?'':'s')+' · '+perd+' perdido'+(perd===1?'':'s'),'')+
+   tile('Saldo a vencer',brl0(emAberto-aPagar),'a receber '+brl0(emAberto)+' · a pagar '+brl0(aPagar),'')+
+   tile('Rende por dia de trabalho',rdM==null?'—':brl0(rdM),rdM==null?'nenhum projeto entregue no período':rdN+' entregue'+(rdN===1?'':'s')+' · um dia custa '+brl0(rdC/rdD),'',rdM==null?'':rdM>=rdC/rdD?'ok':'bad')+
+  '</div>'+
+  '<div class="dash-grid"><div class="card chart-card"><div class="chart-head"><h3>Entradas e saídas em '+ano+'</h3><div class="legend"><span><i style="background:#2A5E9A"></i>Entradas</span><span><i style="background:#C08442"></i>Saídas</span></div></div><div class="chart" id="chart">'+svg+'<div class="tip" id="chart-tip"></div></div></div>'+
+  '<div class="card chart-card"><div class="chart-head"><h3>Para onde foi o dinheiro</h3><span class="muted small">'+esc(perLabel)+'</span></div>'+catHTML+'</div></div>'+
+  '<div class="card"><div class="card-head"><h3>Projetos vendidos em '+esc(perLabel)+'</h3><span class="pill">'+vendidas.length+'</span></div><div class="scroll">'+(obrasRows?'<table class="tbl"><thead><tr><th>Projeto</th><th class="r">Contrato</th><th class="r">Lucro previsto</th><th class="r">Lucro real</th></tr></thead><tbody>'+obrasRows+'</tbody></table>':'<div class="list"><div class="empty">Nenhum projeto vendido neste período.</div></div>')+'</div></div>';
 }
 var MESES_LONG=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
 function chartHover(e){
@@ -2262,16 +2373,14 @@ function cxMonthCard(projects){
     '<div class="actions"><button class="btn btn-sm" data-act="cxMonthShift" data-d="-1" aria-label="Mês anterior">‹</button>'+
     '<input class="in" id="cx-month" type="month" value="'+esc(month)+'" aria-label="Mês das Caixinhas">'+
     '<button class="btn btn-sm" data-act="cxMonthShift" data-d="1" aria-label="Próximo mês">›</button></div></div>'+
-    '<div class="cx-reserve"><div class="cx-project-head"><h3>Reserva para as contas do mês</h3><a class="btn btn-sm" href="#dinheiro" data-act="goTab" data-tab="pagar">Ver contas a pagar</a></div>'+
-    '<dl class="cx-reserve-values">'+amount('Total das contas do mês',reserve.total)+amount('Já pago',reserve.paid)+amount('Reservado para o restante',reserve.covered)+amount('Falta juntar neste mês',reserve.gap,reserve.gap?'cx-reserve-gap':'')+'</dl>'+
-    '<p class="muted small">'+(reserve.total?'O total inclui contas pagas e em aberto com vencimento neste mês. Do restante, descontamos a reserva disponível na categoria correspondente. Valores ainda a receber não contam como dinheiro já reservado.':'Nenhuma conta lançada com vencimento neste mês. Programe os custos fixos e inclua equipe, impostos e demais despesas no A pagar para completar a meta.')+'</p><button class="btn btn-sm" data-act="configureFixedBills">Programar contas fixas</button>'+fixedBillsHint()+'</div>'+
-    '<details class="cx-month-details"><summary>Ver divisão por categoria</summary><div class="scroll" role="region" aria-label="Resumo mensal por categoria" tabindex="0"><table class="tbl cx-month-table"><thead><tr><th>Categoria</th><th class="r">A receber</th><th class="r">A separar</th><th class="r">Separado</th><th class="r">Contas em aberto</th><th class="r">Falta acumular</th></tr></thead><tbody>'+
+    '<div class="cx-reserve"><div class="cx-project-head"><h3>Para completar as contas do mês</h3><a class="btn btn-sm" href="#dinheiro" data-act="goTab" data-tab="pagar">Ver contas a pagar</a></div><p class="cx-month-goal"><span>Falta juntar neste mês</span><b>'+brl(reserve.gap/100)+'</b></p><p class="muted small">Total do mês: '+brl(reserve.total/100)+' · Já pago: '+brl(reserve.paid/100)+' · Reserva disponível para o restante: '+brl(reserve.covered/100)+'. A meta considera as contas lançadas no A pagar e os valores já separados.</p>'+fixedBillsHint()+'</div>'+
+    '<div class="scroll" role="region" aria-label="Resumo mensal por categoria" tabindex="0"><table class="tbl cx-month-table"><thead><tr><th>Categoria</th><th class="r">A receber</th><th class="r">A separar</th><th class="r">Separado</th><th class="r">Contas em aberto</th><th class="r">Falta acumular</th></tr></thead><tbody>'+
     CX.map(function(c,i){
       var x=totals[i];
       return '<tr><th scope="row"><span class="cx-name"><i class="sw" style="background:'+c[1]+'"></i>'+c[0]+'</span></th>'+
         '<td class="r">'+brl(x.receive/100)+'</td><td class="r'+(x.pending?' received-to-split':'')+'">'+brl(x.pending/100)+'</td>'+
         '<td class="r'+(x.done?' received-split':'')+'">'+brl(x.done/100)+'</td>'+reserveCells(reserve.rows[i])+'</tr>';
-    }).join('')+(reserve.rows[CX.length].open?'<tr><th scope="row">Outras contas</th><td></td><td></td><td></td>'+reserveCells(reserve.rows[CX.length])+'</tr>':'')+'</tbody></table></div></details></section>';
+    }).join('')+(reserve.rows[CX.length].open?'<tr><th scope="row">Outras contas</th><td></td><td></td><td></td>'+reserveCells(reserve.rows[CX.length])+'</tr>':'')+'</tbody></table></div></section>';
 }
 function cxTable(x){
   return '<div class="scroll" role="region" aria-label="Valores por caixinha" tabindex="0"><table class="tbl cx-project-tbl"><thead><tr><th>Destino</th><th class="r">%</th><th class="r">Previsto</th><th class="r">A separar</th><th class="r">Separado</th></tr></thead><tbody>'+
@@ -2285,7 +2394,7 @@ function cxPayments(o,x){
   return x.rows.map(function(row){
     var r=row.rec;
     var chips=CX.map(function(c,i){return row.values[i]?'<span class="cx-chip"><i class="sw" style="background:'+c[1]+'"></i>'+c[0]+' <b>'+brl(row.values[i]/100)+'</b></span>':''}).join('');
-    return '<details class="cx-payment"><summary><span>'+esc(r.desc.split(' — ')[0])+' · '+fd(r.recebidoEm)+' · <b>'+brl(cxCents(r.liquido)/100)+'</b></span>'+
+    return '<details class="cx-payment"><summary><span>'+esc(String(r.desc||'Recebimento').split(' — ')[0])+' · '+fd(r.recebidoEm)+' · <b>'+brl(cxCents(r.liquido)/100)+'</b></span>'+
       (row.separated?pill('ok','Separado'):pill('warn','A separar'))+'</summary><div class="cx-chips">'+chips+'</div>'+
       (row.separated?'':'<button class="btn btn-sm btn-primary" data-act="cxSep" data-o="'+o.id+'" data-id="'+r.id+'">Separei</button>')+'</details>';
   }).join('');
@@ -2357,7 +2466,7 @@ function readCxRates(){
 /* ---------- Ajustes ---------- */
 function vAjustes(){
   if(!ui.cfg)ui.cfg=clone(S.config);
-  var tabs=[['oficina','Oficina e custo da hora'],['horadia','Hora e dia'],['equipe','Equipe'],['materiais','Materiais e kits'],['pagamentos','Formas de pagamento'],['margens','Margens e impostos'],['dados','Dados e backup']];
+  var tabs=[['oficina','Custos fixos e variáveis'],['horadia','Hora e dia'],['equipe','Equipe'],['materiais','Materiais e kits'],['pagamentos','Formas de pagamento'],['margens','Margens e impostos'],['dados','Dados e backup']];
   var body={oficina:aOficina,horadia:aHoraDia,equipe:aEquipe,materiais:aMateriais,pagamentos:aPagamentos,margens:aMargens,dados:aDados}[ui.aTab]();
   var dirty=JSON.stringify(ui.cfg)!==JSON.stringify(S.config);
   return '<div class="page-head"><div><h1>Ajustes</h1><p>Valores que alimentam todos os cálculos. Mude quando os preços ou a equipe mudarem.</p></div><div class="actions" id="cfg-actions">'+(ui.aTab==='dados'?'':ui.aTab==='equipe'?'<button class="btn btn-primary" data-act="newPessoa">Adicionar pessoa</button>':'<button class="btn btn-ghost" data-act="cfgReset"'+(dirty?'':' disabled')+'>Descartar</button><button class="btn btn-primary" data-act="cfgSave">Salvar alterações</button>')+'</div></div>'+
@@ -2385,7 +2494,8 @@ function readBackup(text){
   var required=['clientes','orcamentos','obras','receber','pagar','equipe'];
   var setup=['custosFixos','chapas','fitas','materiais','kits','formas'];
   if(!required.every(function(k){return records(s[k])})||!setup.every(function(k){return records(s.config[k])})||!object(s.config.pesos))throw new Error('O backup está incompleto.');
-  if(!s.orcamentos.every(function(q){
+  if(s.orcamentosExcluidos&&!records(s.orcamentosExcluidos))throw new Error('Há registros inválidos na lixeira de orçamentos.');
+  if(!s.orcamentos.concat(s.orcamentosExcluidos||[]).every(function(q){
     return object(q.contato)&&Array.isArray(q.condicoes)&&q.condicoes.every(id)&&Array.isArray(q.chapas)&&
       (!q.entregas||Array.isArray(q.entregas)&&q.entregas.every(object))&&
       (!q.proposta||object(q.proposta.calc)&&Array.isArray(q.proposta.condicoes)&&q.proposta.condicoes.length>0&&
@@ -2416,10 +2526,21 @@ async function prepareRestore(file){
 }
 function cIn(path,v,opt){opt=opt||{};return '<input class="in'+(opt.num?' r':'')+'" '+(opt.num?'type="number" step="any" inputmode="decimal"':'type="text"')+' data-c="'+path+'" value="'+esc(v)+'" aria-label="'+esc(opt.label||path)+'"'+(opt.id?' id="'+opt.id+'"':'')+'>'}
 function cField(label,path,v,num){var id='cf-'+path.replace(/\./g,'-');return '<div class="field"><label for="'+id+'">'+esc(label)+'</label>'+cIn(path,v,{num:num,id:id,label:label})+'</div>'}
+function companySurvival(C){
+  C=C||S.config;
+  var fixed=0,variable=0;
+  (C.custosFixos||[]).forEach(function(f){if(f.tipo==='variavel')variable+=n(f.valor);else fixed+=n(f.valor)});
+  var payroll=oficina(C).folha,days=isAuto(C.diasFuncionamento)?22:n(C.diasFuncionamento),monthly=fixed+variable+payroll;
+  return {fixed:fixed,variable:variable,payroll:payroll,monthly:monthly,days:days,daily:days>0?monthly/days:null};
+}
+function survivalHTML(C){
+  var x=companySurvival(C);
+  return '<div class="card"><div class="sec"><h2>Quanto a oficina precisa para funcionar</h2><div class="tiles"><div class="tile blue"><span class="k">Custo por mês</span><span class="v">'+brl(x.monthly)+'</span></div><div class="tile"><span class="k">Custo por dia de funcionamento</span><span class="v">'+(x.daily==null?'Configure os dias':brl(x.daily))+'</span><span class="s">'+dec(x.days,0)+' dias por mês</span></div></div><p class="muted small">Despesas fixas '+brl(x.fixed)+' + média das variáveis da oficina '+brl(x.variable)+' + equipe com encargos '+brl(x.payroll)+'.</p><p class="muted small">É o custo para manter a oficina, sem materiais, terceiros e fretes dos projetos. Os salários cadastrados em Equipe já entram nesta conta; não os repita nas despesas abaixo. Para as variáveis, use uma média mensal e revise quando necessário.</p></div></div>';
+}
 function aOficina(){
   var C=ui.cfg;
-  return '<div class="editor"><div class="card"><div class="sec"><h2>Dados da oficina</h2><div class="fgrid">'+cField('Como você quer ser chamado','apelido',C.apelido||'')+cField('Nome que aparece na proposta','nomeOficina',C.nomeOficina)+cField('WhatsApp da oficina','telefone',C.telefone)+'</div></div>'+
-  '<div class="sec"><div class="sec-h"><h2>Custos fixos do mês</h2><span class="muted">Tudo o que se paga com ou sem projeto</span></div><div class="rows">'+C.custosFixos.map(function(f,i){return '<div class="rowform" style="grid-template-columns:minmax(0,1fr) 140px 32px">'+cIn('custosFixos.'+i+'.nome',f.nome,{label:'Nome do custo'})+cIn('custosFixos.'+i+'.valor',f.valor,{num:1,label:'Valor mensal'})+'<button class="icon-btn" data-act="cfgDel" data-list="custosFixos" data-i="'+i+'" aria-label="Remover custo">×</button></div>'}).join('')+'</div><button class="btn btn-sm add" data-act="cfgAdd" data-list="custosFixos">+ Adicionar custo</button></div>'+
+  return '<div id="company-survival">'+survivalHTML(C)+'</div><div class="editor"><div class="card"><div class="sec"><h2>Dados da oficina</h2><div class="fgrid">'+cField('Como você quer ser chamado','apelido',C.apelido||'')+cField('Nome que aparece na proposta','nomeOficina',C.nomeOficina)+cField('WhatsApp da oficina','telefone',C.telefone)+'</div></div>'+
+  '<div class="sec"><div class="sec-h"><h2>Custos fixos e variáveis da oficina</h2><span class="muted">Valores mensais para manter a oficina</span></div><div class="rows">'+C.custosFixos.map(function(f,i){return '<div class="rowform company-cost-row">'+cIn('custosFixos.'+i+'.nome',f.nome,{label:'Nome do custo'})+'<select class="in" data-c="custosFixos.'+i+'.tipo" aria-label="Tipo de custo"><option value="fixo"'+(f.tipo!=='variavel'?' selected':'')+'>Fixo</option><option value="variavel"'+(f.tipo==='variavel'?' selected':'')+'>Variável</option></select>'+cIn('custosFixos.'+i+'.valor',f.valor,{num:1,label:'Valor mensal'})+'<button class="icon-btn" data-act="cfgDel" data-list="custosFixos" data-i="'+i+'" aria-label="Remover custo">×</button></div>'}).join('')+'</div><button class="btn btn-sm add" data-act="cfgAdd" data-list="custosFixos">+ Adicionar custo</button></div>'+
   '<div class="sec"><div class="sec-h"><h2>Tempo padrão</h2><span class="muted">Usado para sugerir as horas de cada orçamento</span></div><div class="fgrid">'+cField('Horas de oficina por chapa (com montagem)','horasPorChapa',C.horasPorChapa,1)+cField('Instalação (% do tempo de oficina)','instalacaoPct',C.instalacaoPct,1)+'</div>'+
   '<p class="muted small">O tempo padrão fica fixo. Se a oficina passar a fazer o mesmo móvel mais rápido, o preço não cai: a diferença aparece como lucro a mais e como rendimento por dia maior, em Financeiro.</p>'+
   (function(){var m=mediaReal();return m?'<div class="sugg"><p>Nos projetos entregues, a oficina gastou em média <b>'+dec(m.hpc,1)+' h por chapa</b>, contra '+dec(n(C.horasPorChapa),1)+' h do padrão. '+(m.hpc<n(C.horasPorChapa)?'Ela está mais rápida que o padrão: esse ganho fica com você.':m.hpc>n(C.horasPorChapa)*1.05?'Ela está mais lenta que o padrão: vale rever o processo ou subir o padrão.':'Está dentro do padrão.')+'</p></div>':''})()+'</div>'+
@@ -2429,9 +2550,10 @@ function aOficina(){
   '<aside class="summary" id="cfg-live"></aside></div>';
 }
 function cfgLive(){
+  var company=$('#company-survival');if(company&&ui.cfg)company.innerHTML=survivalHTML(ui.cfg);
   var hl=$('#hd-live');if(hl&&ui.cfg){hl.innerHTML=hdTiles(ui.cfg);var hc=$('#hd-cap');if(hc)hc.innerHTML=hdCap(ui.cfg)}
   var el=$('#cfg-live');if(!el)return;var of=oficina(ui.cfg);
-  el.innerHTML='<div class="card"><div class="bigs"><div class="hl"><span class="k">Custo da hora por pessoa</span><span class="big">'+brl(of.custoHora)+'</span></div><div><span class="k">Custos fixos</span><span class="big" style="font-size:18px">'+brl0(of.fixos)+'</span></div><div><span class="k">Equipe (com encargos)</span><span class="big" style="font-size:18px">'+brl0(of.folha)+'</span></div><div><span class="k">Horas produtivas</span><span class="big" style="font-size:18px">'+dec(of.horas,0)+' h</span></div></div><div class="brk"><p class="muted small">Hora produtiva é o tempo disponível para trabalhar nos projetos, após descontar pausas e outras atividades pelo percentual de aproveitamento. O cálculo soma as horas do dono e da equipe ativa. Custo por pessoa-hora = (custos fixos + folha com encargos) ÷ horas produtivas totais.</p><p class="muted small">Ao cadastrar alguém, o custo mensal e a capacidade aumentam. O valor por hora pode cair porque os custos fixos são divididos entre mais horas. Duas pessoas trabalhando por 8 horas representam 16 horas no orçamento. Essa conta depende de ocupar a capacidade estimada; reduza o aproveitamento se houver ociosidade.</p></div></div>';
+  el.innerHTML='<div class="card"><div class="bigs"><div class="hl"><span class="k">Custo da hora por pessoa</span><span class="big">'+brl(of.custoHora)+'</span></div><div><span class="k">Despesas da oficina</span><span class="big" style="font-size:18px">'+brl0(of.fixos)+'</span></div><div><span class="k">Equipe (com encargos)</span><span class="big" style="font-size:18px">'+brl0(of.folha)+'</span></div><div><span class="k">Horas produtivas</span><span class="big" style="font-size:18px">'+dec(of.horas,0)+' h</span></div></div><div class="brk"><p class="muted small">Hora produtiva é o tempo disponível para trabalhar nos projetos, após descontar pausas e outras atividades pelo percentual de aproveitamento. O cálculo soma as horas do dono e da equipe ativa. Custo por pessoa-hora = (despesas fixas e variáveis + folha com encargos) ÷ horas produtivas totais.</p><p class="muted small">Ao cadastrar alguém, o custo mensal e a capacidade aumentam. O valor por hora pode cair porque os custos fixos são divididos entre mais horas. Duas pessoas trabalhando por 8 horas representam 16 horas no orçamento. Essa conta depende de ocupar a capacidade estimada; reduza o aproveitamento se houver ociosidade.</p></div></div>';
   var ab=$('#cfg-actions [data-act="cfgReset"]');if(ab)ab.disabled=JSON.stringify(ui.cfg)===JSON.stringify(S.config);
 }
 function aEquipe(){
@@ -2541,12 +2663,8 @@ var A={
   cloudConfirmDiscard:function(){exportBackup();closeModal();cloud.refresh({discard:true})},
   bgClose:function(b,e){if(e.target===b)closeModal()},
   closeModal:closeModal,
-  mobcloudImport:function(){
-    if(readOnly)return;
-    openModal({title:'Importar projeto',body:'<div class="field"><label for="mobcloud-file">Arquivo do projetista</label><input class="in" id="mobcloud-file" type="file" accept=".pdf,.dxf,.csv,.txt,.xml" multiple></div>'+
-      '<p class="muted small" id="mobcloud-status" role="status">PDF, DXF, CSV, TXT ou XML. O sistema lê as peças, soma o consumo por material e pede sua conferência. Para combinar orçamento e plano de corte Mobcloud, selecione os dois PDFs juntos.</p>',
-      foot:ui.mobcloud?'<button class="btn" data-act="mobcloudResume">Voltar à conferência</button>':''});
-  },
+  mobcloudImport:function(){startProjectImport(null)},
+  importIntoDraft:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;if(!String(d.contato&&d.contato.nome||'').trim()){toast('Preencha ou selecione o cliente antes de importar.');return}autoSaveDraft();startProjectImport(d)},
   mobcloudResume:function(){if(ui.mobcloud)mobcloudPreview(ui.mobcloud)},
   pieceConfirm:confirmProjectPieces,
   pieceFillUnits:function(){
@@ -2565,9 +2683,28 @@ var A={
     closeModal();ui.aTab='materiais';location.hash='#ajustes';render();cfgLive();
   },
   mobcloudApply:applyMobcloud,
-  newQuote:function(){ui.step=0;ui.quoteId='new';ui.draft=newDraft();location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
-  newQuoteFor:function(b){closeModal();ui.step=0;ui.quoteId='new';ui.draft=newDraft(b.dataset.id);location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
+  newQuote:function(){ui.importDraft=null;ui.step=0;ui.quoteId='new';ui.draft=newDraft();location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
+  newQuoteFor:function(b){ui.importDraft=null;closeModal();ui.step=0;ui.quoteId='new';ui.draft=newDraft(b.dataset.id);location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
   openQuote:function(b){closeModal();openQuote(b.dataset.id)},
+  editQuote:function(b){
+    var q=quote(b.dataset.id);if(!q||readOnly)return;
+    if(q.status==='rascunho'){closeModal();openQuote(q.id);return}
+    if(q.status==='aprovado'||approvedRevision(q)){toast('O orçamento aprovado mantém o contrato e o financeiro. Duplique para preparar um novo orçamento.');return}
+    openModal({title:'Editar por revisão',body:'<p>A proposta original será preservada. Vamos abrir uma revisão em rascunho para você corrigir os dados e enviar novamente.</p>',foot:'<button class="btn" data-act="closeModal">Cancelar</button><button class="btn btn-primary" data-act="reviseQuote" data-id="'+q.id+'">Criar revisão e editar</button>'});
+  },
+  deleteQuote:function(b){
+    var q=quote(b.dataset.id)||ui.draft,error=quoteDeleteReason(q);if(readOnly)return;
+    if(error){toast(error);return}
+    openModal({title:'Excluir orçamento?',body:'<p>'+esc(q.titulo||'Sem título')+' será retirado da lista. Você poderá restaurá-lo pela lixeira. O cadastro do cliente será mantido.</p>',foot:'<button class="btn" data-act="closeModal">Cancelar</button><button class="btn btn-danger" data-act="confirmDeleteQuote" data-id="'+q.id+'">Excluir orçamento</button>'});
+  },
+  confirmDeleteQuote:function(b){
+    if(readOnly)return;if(!quote(b.dataset.id)&&ui.draft&&ui.draft.id===b.dataset.id)S.orcamentos.push(clone(ui.draft));var result=deleteQuoteRecord(b.dataset.id);
+    if(result.error){toast(result.error);return}
+    if(ui.quoteId===b.dataset.id||ui.draft&&ui.draft.id===b.dataset.id){ui.quoteId=null;ui.draft=null}
+    closeModal();save('Orçamento movido para a lixeira.');
+  },
+  quoteTrash:showQuoteTrash,
+  restoreQuote:function(b){if(readOnly)return;var result=restoreQuoteRecord(b.dataset.id);if(result.error){toast(result.error);return}closeModal();save('Orçamento restaurado.')},
   duplicateQuote:function(b){copyQuote(b.dataset.id,false)},
   reviseQuote:function(b){copyQuote(b.dataset.id,true)},
   backQuotes:function(){ui.quoteId=null;ui.draft=null;render()},
@@ -2602,7 +2739,7 @@ var A={
   delRow:function(b){ui.draft[b.dataset.row].splice(+b.dataset.i,1);rerenderEditor();autoSaveDraft()},
   saveQuote:function(){commitDraft();ui.quoteId=ui.draft.id;save('Orçamento salvo.');live()},
   viewQuote:function(b){viewQuote(b.dataset.id)},
-  linkCliente:function(b){var c=cliente(b.dataset.id);ui.draft.clienteId=c.id;ui.draft.contato={nome:c.nome,telefone:c.telefone};rerenderEditor();autoSaveDraft()},
+  linkCliente:function(b){var c=cliente(b.dataset.id);ui.draft.clienteId=c.id;ui.draft.contato=clientContact(c);rerenderEditor();autoSaveDraft()},
   profitAreas:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;var c=calcQuote(d);d.lucros=profitDefaults(c);d.precoModo='areas';rerenderEditor();autoSaveDraft()},
   profitGlobal:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;delete d.precoModo;rerenderEditor();autoSaveDraft()},
   margSug:function(){ui.draft.margemManual='';rerenderEditor();autoSaveDraft()},
@@ -2651,7 +2788,7 @@ var A={
     if(p.error){toast(p.error);return}
     ui.apProposal=p;
     var t=today();
-    openModal({title:'Aprovar: '+p.titulo,wide:true,body:'<p>'+esc(p.cliente)+' vira cliente, o projeto entra no quadro e as parcelas vão para o Financeiro.</p>'+
+    openModal({title:'Aprovar: '+p.titulo,wide:true,body:'<p>'+esc(p.cliente)+' terá o projeto no quadro e as parcelas no Financeiro.</p>'+
       (d.enviadoEm&&!d.proposta?'<p class="alert warn">Esta proposta foi enviada antes do arquivamento. Confira os valores e as condições com o cliente antes de aprovar.</p>':'')+
       (p.valida<t?'<p class="alert warn">A validade terminou em '+fd(p.valida)+'. Confirme a condição com o cliente.</p>':'')+
       selectF('Forma de pagamento aceita','ap-forma',p.condicoes[0].forma.id,p.condicoes.map(function(x){return [x.forma.id,x.forma.nome+' — '+brl(x.preco)]}))+
@@ -2674,8 +2811,13 @@ var A={
   },
   posVendaFeito:function(b){var o=obra(b.dataset.id);o.posVendaFeito=true;save('Pós-venda registrado.')},
   openCliente:function(b){openCliente(b.dataset.id)},
-  saveCliente:function(b){var c=cliente(b.dataset.id);c.nome=val('cl-nome')||c.nome;c.telefone=val('cl-tel');c.email=val('cl-email');c.endereco=val('cl-end');c.obs=val('cl-obs');
-    S.orcamentos.forEach(function(q){if(q.clienteId===c.id){q.contato={nome:c.nome,telefone:c.telefone}}});closeModal();save('Cliente salvo.')},
+  newCliente:newClientModal,
+  saveCliente:function(b){
+    if(readOnly)return;
+    var id=b.dataset.id,result=saveClientRecord({nome:val('cl-nome'),telefone:val('cl-tel'),email:val('cl-email'),endereco:val('cl-end'),obs:val('cl-obs')},id);
+    if(result.error){toast(result.error);return}
+    if(!id)ui.cSearch='';closeModal();save('Cliente salvo.');
+  },
   openObra:function(b){openObra(b.dataset.id)},
   moveObra:function(b){var o=obra(b.dataset.id);var k=o.etapa+(+b.dataset.dir);if(k<0||k>4)return;if(k===4){openEntrega(o.id);return}o.etapa=k;
     if(k===4){openEntrega(o.id);return}

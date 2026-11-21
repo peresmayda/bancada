@@ -35,16 +35,16 @@
 - Margem ajustada por um questionário de valor (complexidade, prazo, exclusividade, risco, acabamento, estratégico).
 - Comparação de material × N (multiplicador configurável) separada do controle de margem.
 - Formas de pagamento: Pix, dinheiro, entrada + X parcelas (o usuário escolhe quantas), 50/50, boleto, débito, crédito, cheque.
-- Um contato só vira **cliente** quando um orçamento é aprovado. Sem duplicar clientes (`mergeDupes`).
+- **Clientes** podem ser cadastrados diretamente, com nome, telefone, e-mail, endereço e observações, sem orçamento. Cadastros sem projeto aprovado aparecem em Sem projetos. A aprovação também pode criar o cliente quando necessário. Alterações do cadastro atualizam os rascunhos; propostas já enviadas mantêm o histórico e endereços específicos da instalação são preservados.
 - Etapas do projeto: Projeto final → Compra de material → Produção → Instalação → Entregue.
 - Ao **entregar** um projeto, abre uma janela pedindo material gasto, horas reais e gastos extras (vem preenchida com o previsto). Isso calcula o lucro real.
 - **Lucro por projeto**: previsto (o que o orçamento calculou) contra real (o que sobrou de fato).
 - **Caixinhas**: cada projeto tem percentuais de material, terceiros e frete, comissão, impostos, equipe e oficina, e lucro, calculados sobre o total líquido. A sugestão vem dos custos previstos. O usuário pode ajustar uma divisão que soma 100%. Cada recebimento pendente é dividido proporcionalmente e, ao marcar "Separei", os valores da parcela ficam registrados. Separações anteriores à v29 preservam os valores calculados pela ordem antiga. A visão geral conta os projetos por situação. Os que têm parcelas em aberto aparecem primeiro por vencimento, os recebidos com separação pendente vêm em seguida e os totalmente separados ficam no fim.
 - **Caixinhas do mês**: reúne as categorias de todos os projetos num mês selecionado. Usa o vencimento para parcelas em aberto e a data de recebimento para valores recebidos, com a separação atual de cada parcela.
-- **Reserva do mês**: sempre aparece nas Caixinhas, mesmo sem projetos. Mostra total das contas com vencimento no mês, já pago, reserva disponível para o restante e quanto falta juntar. Só conta como reserva o que já foi separado, com abatimento dos pagamentos da mesma categoria. Recebimentos futuros não cobrem a meta. O detalhamento por categoria fica recolhido.
+- **Reserva do mês**: Caixinhas mantém a tabela e os grupos anteriores abertos. Uma linha destaca quanto falta juntar para as contas do mês, considerando contas lançadas, pagamentos e reserva já separada. Recebimentos futuros não cobrem a meta. A programação mensal das despesas continua no A pagar.
 - **Contas fixas mensais**: valores de Ajustes só entram no A pagar após programar os custos escolhidos e o dia de vencimento. O primeiro mês é informado na programação. Ao abrir o sistema, ele gera as competências faltantes até o mês atual e até meses futuros consultados, sem duplicar a chave custo/mês. Vencimentos 29–31 são limitados ao fim do mês. Uma conta manual com o mesmo nome e mês é vinculada, preservando o valor já registrado, quando há correspondência única. Pagamentos e lançamentos já gerados não são reescritos ao mudar a configuração. Excluir uma conta recorrente registra uma exceção para que não reapareça. Editar altera apenas aquela ocorrência.
-- **Visão geral financeira**: quatro indicadores mensais (recebido, pago, saldo e falta juntar), resumo da meta e atalhos para A receber, A pagar e Caixinhas; detalhes de projetos ficam nas abas específicas.
-- **Clientes**: separados em Ativos (projeto em andamento ou parcela a receber) e Finalizados.
+- **Visão geral financeira**: restaura os indicadores e gráficos anteriores, incluindo vendas, recebido, despesas pagas, resultado de caixa, custo previsto das vendas, lucro previsto, ticket, fechamento e rendimento diário. Custos e lucros previstos dos contratos são distintos de pagamentos e resultado de caixa.
+- **Clientes na lista**: Ativos (projeto ou parcela em aberto), Sem projetos e Finalizados (projetos entregues e pagos).
 
 ## Decisões de design (o que a Mayda aprovou)
 
@@ -82,3 +82,11 @@
 - Textos diretos e secos, sem clichês.
 - Sem viúvas (uma palavra sozinha na última linha) em nenhum formato.
 - Ela prefere conversar antes: perguntar quando algo não estiver claro.
+
+## Cadastros e manutenção
+
+- **Excluir orçamento**: move rascunhos e propostas sem vínculo financeiro para a lixeira recuperável, incluída nos backups. Não apaga o cliente. Orçamentos aprovados ou com projeto e famílias com revisão aprovada não são excluídos. Uma versão com revisões pendentes exige remover as revisões primeiro; a recuperação respeita a ordem da cadeia.
+- **Editar orçamento**: rascunhos abrem diretamente para edição. Enviados e perdidos abrem uma revisão em rascunho, mantendo a proposta original. Contratos aprovados preservam o financeiro; duplicação continua disponível.
+- **Endereço**: acompanha cliente e orçamento, é copiado para a versão da proposta no envio e para o projeto na aprovação. Pode ser específico de cada instalação.
+- **Importar no orçamento**: botões nas etapas Cliente e Materiais. Preserva o orçamento, cliente, endereço e condições; substitui somente chapas, fitas e itens após conferência. Um tempo já informado não é reestimado por padrão.
+- **Custos fixos e variáveis**: cada despesa mensal da oficina pode ser marcada como fixa ou variável (média mensal). A visão de manutenção soma ambas e a equipe com encargos, dividida pelos dias de funcionamento para o custo diário. Materiais, terceiros e fretes dos projetos ficam fora. Os salários da equipe não devem ser repetidos nas despesas. A classificação não muda o cálculo do orçamento: ambas já fazem parte dos custos mensais da oficina.
