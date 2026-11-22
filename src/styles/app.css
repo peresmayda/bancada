@@ -883,3 +883,14 @@ td .cpar{margin-top:4px}
  .cloud-acct-m b{font-size:14px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;flex:1}
  .cloud-acct-m .muted{width:100%}
 }
+
+/* Ajuste final: controles estáveis durante o arraste, também em telas estreitas. */
+.profit-adjustment{padding:18px 0;border-bottom:1px solid var(--line);margin-bottom:14px}
+.profit-adjustment .ctrl-h{margin-bottom:4px}
+.profit-values{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px}
+.prop-tbl th{text-align:left;font-size:12px;color:var(--muted);padding:8px 0}
+.prop-tbl th.r{text-align:right}
+
+.profit-live{position:sticky;top:10px;z-index:5;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 16px;background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.profit-live span{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;font-size:13px}
+.profit-live b{font-size:20px;font-variant-numeric:tabular-nums}

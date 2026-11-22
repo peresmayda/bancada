@@ -1745,8 +1745,9 @@ function proposalItemsForm(d){
     var name='entrega-'+i;
     return '<fieldset class="field scope-item"><legend>Item '+(i+1)+'</legend><div class="fgrid">'+
       '<div class="field"><label for="'+name+'">O que será entregue</label><input class="in" id="'+name+'" data-delivery="'+i+'" data-key="nome" value="'+esc(item.nome)+'" placeholder="Ex.: Armário superior"></div>'+
+      '<div class="field"><label for="'+name+'-qtd">Quantidade</label><input class="in r" type="number" min="0.001" step="any" id="'+name+'-qtd" data-delivery="'+i+'" data-key="qtd" value="'+esc(item.qtd==null?1:item.qtd)+'"></div>'+
       (d.valorarEntregas?'<div class="field"><label for="'+name+'-valor">Valor total do item (R$)</label><input class="in r" type="number" min="0" step="0.01" id="'+name+'-valor" data-delivery="'+i+'" data-key="valor" value="'+esc(item.valor)+'"></div>':'')+
-      '</div><div class="field"><label for="'+name+'-descricao">Medidas, materiais ou acabamento</label><textarea class="in" id="'+name+'-descricao" data-delivery="'+i+'" data-key="descricao">'+esc(item.descricao)+'</textarea></div>'+
+      '</div><div class="field"><label for="'+name+'-descricao">Medidas, materiais ou acabamento (opcional)</label><textarea class="in" id="'+name+'-descricao" data-delivery="'+i+'" data-key="descricao">'+esc(item.descricao)+'</textarea></div>'+
       '<button class="btn btn-sm btn-ghost" data-act="removeDelivery" data-i="'+i+'" aria-label="Remover item '+(i+1)+'">Remover item</button></fieldset>';
   }).join('');
   return '<div class="sec"><div class="sec-h"><h2>Entregas por item</h2><span class="muted">Opcional</span></div>'+
@@ -1781,10 +1782,16 @@ function laborForm(d){
     (d.rateioModo==='dias'?'<div class="field"><label for="ed-diasOficina">Dias que o projeto ocupa a oficina</label>'+numIn('diasOficina',d.diasOficina,' min="0"')+'</div><p class="muted small">Use quando o projeto bloquear a capacidade da oficina nesses dias.</p>':'')+
     '<div id="labor-info"></div>';
 }
+function profitPreview(c){
+  return '<div class="profit-live" role="status" aria-live="polite" aria-atomic="true"><span>Preço sem taxas <b data-profit-price>'+brl(c.preco)+'</b></span><span>Lucro da empresa <b data-profit-total>'+brl(c.sobra)+'</b></span></div>';
+}
 function areaProfitForm(d){
   var c=calcQuote(d),labels={material:'Material',maoObra:'Mão de obra',empresa:'Empresa'};
-  return '<div class="sec"><h2>Lucro sobre cada custo</h2><p class="muted small">De 0% a 100% sobre o custo de cada área. Um acréscimo de 100% dobra aquele custo; não é uma margem de 100% sobre o preço de venda. Terceiros e frete entram pelo custo, sem acréscimo.</p><div class="scroll"><table class="tbl"><thead><tr><th>Área</th><th class="r">Custo</th><th>Lucro sobre o custo (%)</th><th class="r">Lucro em reais</th></tr></thead><tbody>'+
-    ['material','maoObra','empresa'].map(function(key){return '<tr><td>'+labels[key]+'</td><td class="r" data-area-cost="'+key+'">'+brl(c.custosAreas[key])+'</td><td><input class="in r" type="number" min="0" max="100" step="0.5" data-f="lucros.'+key+'" id="ed-lucro-'+key+'" aria-label="Lucro sobre '+labels[key].toLowerCase()+' (%)" value="'+esc((d.lucros||{})[key])+'"></td><td class="r" data-area-profit="'+key+'">'+brl(c.lucroAreas[key])+'</td></tr>'}).join('')+'</tbody></table></div><p class="muted small">Impostos e comissão são calculados por fora desses custos e lucros. Na etapa Pagamento, taxas e descontos mostram o lucro que efetivamente sobra.</p></div>';
+  return '<div class="sec"><h2>Lucro sobre cada custo</h2><p class="muted small">Arraste para ver o preço e o lucro mudarem na hora. De 0% a 100% sobre cada custo; 100% dobra aquele custo. Terceiros e frete entram pelo custo, sem acréscimo.</p>'+profitPreview(c)+
+    ['material','maoObra','empresa'].map(function(key){var value=(d.lucros||{})[key],label='Lucro sobre '+labels[key].toLowerCase();return '<div class="profit-adjustment"><div class="ctrl-h"><label for="ed-lucro-'+key+'-range"><b>'+labels[key]+'</b></label><div class="rng-val"><input class="in r" type="number" min="0" max="100" step="0.5" data-profit="'+key+'" id="ed-lucro-'+key+'" aria-label="'+label+' (%)" value="'+esc(value)+'"><span>%</span></div></div>'+
+      '<input class="range" type="range" min="0" max="100" step="0.5" data-profit="'+key+'" id="ed-lucro-'+key+'-range" aria-label="'+label+'" value="'+esc(value)+'"><div class="range-scale"><span>0%</span><span>50%</span><span>100%</span></div>'+
+      '<div class="profit-values small"><span>Custo: <b data-area-cost="'+key+'">'+brl(c.custosAreas[key])+'</b></span><span>Lucro: <b data-area-profit="'+key+'">'+brl(c.lucroAreas[key])+'</b></span></div></div>'}).join('')+
+    '<p class="muted small">Impostos e comissão são calculados por fora desses custos e lucros. As condições de pagamento abaixo mostram o efeito das taxas e descontos.</p></div>';
 }
 function diasRound(h){var v=n(h)/horasDia();return h===''||h==null?'':String(Math.round(v*100)/100)}
 function diasIn(f,h){return '<input class="in r" type="number" step="any" min="0" inputmode="decimal" data-dias="'+f+'" id="ed-dias-'+f+'" value="'+esc(diasRound(h))+'">'}
@@ -1878,11 +1885,11 @@ function reviewHTML(d){
   var ctrl=locked?'<div class="alert ok" style="margin-bottom:18px">Aprovado. Os valores ficaram travados no contrato.</div>':
    '<div class="card ctrl"><div class="ctrl-h"><div><h3>Margem de lucro</h3><span class="muted small">Sugerida pelo questionário: '+pct(c.margemSug)+' · <button class="linkbtn" data-act="margSug">voltar para a sugerida</button></span></div>'+
    '<div class="rng-val"><input class="in r" type="number" step="0.5" id="rv-margem-n" data-rv="margem" value="'+Math.round(c.margem*10)/10+'" aria-label="Margem de lucro em porcentagem"><span>%</span></div></div>'+
-   '<input type="range" min="0" max="60" step="0.5" id="rv-margem" data-rv="margem" value="'+c.margem+'" aria-label="Margem de lucro" class="range"><div class="range-scale"><span>0%</span><span>15%</span><span>30%</span><span>45%</span><span>60%</span></div></div>';
-  if(!locked)ctrl='<div class="card">'+(d.precoModo==='areas'?areaProfitForm(d)+'<div class="sec"><button class="btn btn-sm" data-act="profitGlobal">Voltar à margem da etapa Valor</button></div>':'<div class="sec"><h2>Ajuste final de lucro</h2><p class="muted small">O preço mantém a margem definida na etapa Valor. Aqui você pode trocar por lucros independentes sobre material, mão de obra e empresa, de 0% a 100% sobre cada custo.</p><button class="btn btn-primary" data-act="profitAreas">Ajustar lucro por categoria</button></div>')+'</div>';
+   '<input type="range" min="0" max="60" step="0.5" id="rv-margem" data-rv="margem" value="'+c.margem+'" aria-label="Margem de lucro" class="range"><div class="range-scale"><span>0%</span><span>15%</span><span>30%</span><span>45%</span><span>60%</span></div>'+profitPreview(c)+'</div>';
+  if(!locked)ctrl=d.precoModo==='areas'?'<div class="card">'+areaProfitForm(d)+'<div class="sec"><button class="btn btn-sm" data-act="profitGlobal">Voltar à margem da etapa Valor</button></div></div>':ctrl+'<div class="sec"><button class="btn" data-act="profitAreas">Ajustar lucro por categoria</button></div>';
   var cmpHead='<div class="cmp-h"><h3>Comparação com material ×</h3>'+(locked?'<b>'+dec(c.N)+'</b>':'<input class="in r" type="number" step="0.1" min="0" id="rv-mult" data-rv="multN" value="'+c.N+'" aria-label="Multiplicador do material">')+'</div><p class="small" style="margin:-2px 0 6px">Padrão da oficina: × '+dec(C.multN)+'</p>';
   var form=locked?'':'<div class="card proposal-edit" id="proposal-fields"><div class="sec"><h2>Proposta para o cliente</h2>'+
-    '<div class="field"><label for="ed-descricao">Descrição do serviço</label><textarea class="in" id="ed-descricao" data-f="descricao" required placeholder="Descreva o que será entregue, os ambientes, materiais e acabamentos.">'+esc(d.descricao||'')+'</textarea></div></div>'+
+    '<div class="field"><label for="ed-descricao">Descrição do serviço (opcional)</label><textarea class="in" id="ed-descricao" data-f="descricao" placeholder="Descreva o que será entregue, os ambientes, materiais e acabamentos.">'+esc(d.descricao||'')+'</textarea></div></div>'+
     proposalItemsForm(d)+'<div id="proposal-issue"></div></div>';
   return ctrl+'<div id="rv-top"></div>'+
    '<div class="grid2"><div class="card" id="rv-brk"></div><div class="stack"><div class="cmp">'+cmpHead+'<div id="rv-cmp"></div></div><div class="card" id="rv-conds"></div></div></div>'+
@@ -1890,6 +1897,8 @@ function reviewHTML(d){
 }
 function refreshReview(){
   var d=ui.draft;if(!d||!$('#rv-top'))return;var c=d.proposta?d.proposta.calc:calcQuote(d),C=S.config;var locked=d.status==='aprovado';
+  $$('[data-profit-price]').forEach(function(el){el.textContent=c.valido?brl(c.preco):'Ajuste inválido'});
+  $$('[data-profit-total]').forEach(function(el){el.textContent=c.valido?brl(c.sobra):'—'});
   var editor=$('#proposal-fields');
   if(editor)editor.hidden=!c.valido;
   if(!c.valido){$('#rv-top').innerHTML='<div class="alert bad" style="margin-bottom:18px">'+esc(c.erro||(c.labor||{}).erro||'Com essa margem, imposto e comissão, o preço não fecha. Diminua a margem.')+'</div>';['#rv-brk','#rv-cmp','#rv-conds'].forEach(function(s){$(s).innerHTML=''});return}
@@ -2051,7 +2060,6 @@ function proposalData(q,emissao){
   if(!c.valido)return {error:c.erro||'O orçamento ainda não tem preço válido.'};
   var descricao=String(q.descricao||'').trim(),prazo=n(q.prazoDias),unit=q.prazoUnidade==='corridos'?'corridos':'úteis';
   if(q.status==='rascunho'){
-    if(!descricao)return {error:'Descreva o serviço e o que será entregue.'};
     if(!Number.isSafeInteger(prazo)||prazo<30)return {error:'Em Pagamento, informe o prazo de execução de pelo menos 30 dias.'};
   }
   var forms=(q.condicoes||[]).map(forma).filter(Boolean);
@@ -2067,13 +2075,14 @@ function proposalData(q,emissao){
   if(priced&&!reference)return {error:'Escolha a condição de referência para os valores por item.'};
   var items=[],sum=0;
   for(var item of source){
-    var name=String(item.nome||'').trim(),value=Number(item.valor),cents=Math.round(value*100);
+    var name=String(item.nome||'').trim(),value=Number(item.valor),cents=Math.round(value*100),qty=item.qtd==null?1:Number(String(item.qtd).replace(',','.'));
+    if(!Number.isFinite(qty)||qty<=0||qty>Number.MAX_SAFE_INTEGER)return {error:'Informe uma quantidade maior que zero para cada item da proposta.'};
     if(!name)return {error:'Informe o nome de cada item da proposta.'};
     if(priced&&(item.valor===''||item.valor==null||cents<0||!Number.isSafeInteger(cents)||Math.abs(value*100-cents)>0.00001)){
       return {error:'Informe um valor válido, com até duas casas decimais, para cada item.'};
     }
     if(priced)sum+=cents;
-    items.push({nome:name,descricao:String(item.descricao||'').trim(),valor:priced?cents/100:null});
+    items.push({nome:name,descricao:String(item.descricao||'').trim(),qtd:qty,valor:priced?cents/100:null});
   }
   if(priced&&sum!==Math.round(reference.preco*100))return {error:'A soma dos itens ('+brl(sum/100)+') deve bater com o total em '+reference.forma.nome+' ('+brl(reference.preco)+').'};
   var calc=Object.assign({},c);delete calc.q;delete calc.ajustes;
@@ -2095,8 +2104,8 @@ function proposalHTML(q){
    '<section class="prop-hero"><p class="prop-cli">Para '+esc(p.cliente)+(p.telefoneCliente?' · '+esc(p.telefoneCliente):'')+'</p>'+(p.endereco?'<p class="prop-cli">Endereço: '+esc(p.endereco)+'</p>':'')+'<h1>'+esc(p.titulo)+'</h1>'+(p.descricao?'<p class="prop-desc">'+esc(p.descricao)+'</p>':'')+'</section>'+
    '<section class="prop-facts"><div><span>Prazo de execução</span><b>'+(p.prazo?esc(p.prazo+' dias '+(p.prazoUnidade||'úteis')):'A confirmar')+'</b><small>a partir da aprovação do projeto final</small></div><div><span>Proposta válida até</span><b>'+fd(p.valida)+'</b><small>'+p.validade+' dias a partir da emissão</small></div></section>'+
    ((p.itens||[]).length?'<section><h2>Entregas por item</h2>'+(p.referencia?'<p class="small muted">Valores em '+esc(p.referencia)+'.</p>':'')+
-     '<table class="prop-tbl">'+p.itens.map(function(item){return '<tr><td>'+esc(item.nome)+(item.descricao?'<small>'+esc(item.descricao)+'</small>':'')+'</td>'+
-       (p.referencia?'<td>'+brl(item.valor)+'</td>':'')+'</tr>'}).join('')+'</table></section>':'')+
+     '<table class="prop-tbl"><thead><tr><th>Item</th><th class="r">Quantidade</th>'+(p.referencia?'<th class="r">Valor total</th>':'')+'</tr></thead><tbody>'+p.itens.map(function(item){return '<tr><td>'+esc(item.nome)+(item.descricao?'<small>'+esc(item.descricao)+'</small>':'')+'</td>'+
+       '<td class="r">'+Number(item.qtd==null?1:item.qtd).toLocaleString('pt-BR',{maximumFractionDigits:20})+'</td>'+(p.referencia?'<td>'+brl(item.valor)+'</td>':'')+'</tr>'}).join('')+'</tbody></table></section>':'')+
    '<section><h2>Investimento</h2><table class="prop-tbl">'+p.condicoes.map(function(x){var l=condLabel(x);return '<tr><td>'+esc(x.forma.nome)+(l?'<small>'+l+'</small>':'')+'</td><td>'+brl(x.preco)+'</td></tr>'}).join('')+'</table></section>'+
    '<section><h2>Está incluso</h2><ul class="prop-list">'+inc.map(function(i){return '<li>'+i+'</li>'}).join('')+'</ul></section>'+
    (p.obs?'<section><h2>Observações</h2><p class="prop-desc">'+esc(p.obs)+'</p></section>':'')+
@@ -2853,7 +2862,7 @@ var A={
   addDelivery:function(){
     if(!ui.draft||readOnly)return;
     var items=ui.draft.entregas||(ui.draft.entregas=[]);
-    items.push({nome:'',descricao:'',valor:''});
+    items.push({nome:'',descricao:'',qtd:1,valor:''});
     rerenderEditor();autoSaveDraft();
     var name=$('#entrega-'+(items.length-1));if(name)name.focus();
   },
@@ -3089,6 +3098,13 @@ document.addEventListener('keydown',function(e){
 document.addEventListener('input',function(e){
   if(cloudEnabled&&(!S||readOnly))return;
   var t=e.target;
+  if(t.dataset&&t.dataset.profit&&ui.draft){
+    if(readOnly||ui.draft.status!=='rascunho'||!['material','maoObra','empresa'].includes(t.dataset.profit))return;
+    var key=t.dataset.profit,value=t.value===''?'':n(t.value);
+    ui.draft.lucros=ui.draft.lucros||{};ui.draft.lucros[key]=value;
+    $$('[data-profit="'+key+'"]').forEach(function(input){if(input!==t&&(input.type!=='range'||value!==''&&value>=0&&value<=100))input.value=value});
+    live();autoSaveDraft();return;
+  }
   if(t.id&&t.id.startsWith('cx-rate-')){readCxRates();return}
   if(t.dataset&&t.dataset.importSearch){var select=$('#'+t.dataset.importSearch),terms=mobcloudKey(t.value).replace(/hannover/g,'hanover').replace(/frejo/g,'freijo').split(/\s+/).filter(Boolean);Array.from(select.options).forEach(function(o){o.hidden=!!o.value&&o.value!==select.value&&!terms.every(function(term){return mobcloudKey(o.textContent).includes(term)})});return}
   if(t.id==='material-search'){$('#material-results').innerHTML=materialResults(t.value);return}
