@@ -90,3 +90,9 @@
 - **Endereço**: acompanha cliente e orçamento, é copiado para a versão da proposta no envio e para o projeto na aprovação. Pode ser específico de cada instalação.
 - **Importar no orçamento**: botões nas etapas Cliente e Materiais. Preserva o orçamento, cliente, endereço e condições; substitui somente chapas, fitas e itens após conferência. Um tempo já informado não é reestimado por padrão.
 - **Custos fixos e variáveis**: cada despesa mensal da oficina pode ser marcada como fixa ou variável (média mensal). A visão de manutenção soma ambas e a equipe com encargos, dividida pelos dias de funcionamento para o custo diário. Materiais, terceiros e fretes dos projetos ficam fora. Os salários da equipe não devem ser repetidos nas despesas. A classificação não muda o cálculo do orçamento: ambas já fazem parte dos custos mensais da oficina.
+
+## Catálogo e associação de importações
+
+A conferência sugere equivalentes por padrão, marca, espessura e acabamento; reconhece Frejó/Freijó, Hannover/Hanover, Velluto/Natural e a ordem dos termos. Apenas equivalentes únicos com especificação suficiente são selecionados automaticamente. Marca, MDF/MDP e espessura incompatíveis impedem a seleção automática. As associações confirmadas ao concluir a importação ficam guardadas para as próximas listas, inclusive quando os termos mudam de ordem.
+
+Cada material tem busca no catálogo e cadastro de chapa, fita ou componente sem abandonar a conferência. Nome e especificações vêm do arquivo; custo positivo e unidade/metros por rolo devem ser confirmados. O cadastro passa a fazer parte da oficina. Não se criam compras a partir de nomes de peças nem preços inventados. A atualização do catálogo preserva preços e IDs existentes.

@@ -1,5 +1,9 @@
 # Pesquisa de preços de MDF
 
+Atualização de 21/11/2026: nomes e espessuras conferidos na Duratex: [Freijó Imperial — Thera](https://www.duratex.com.br/produtos/freijo-imperial), [Cinza Sagrado — Essencial](https://www.duratex.com.br/produtos/cinza-sagrado-linha-essencial) e [Cinza Sagrado — Cristallo](https://www.duratex.com.br/produtos/cinza-sagrado). Imperial e Essencial: 6, 15, 18 e 25 mm; Cristallo: 15 e 18 mm. Freijó Puro, Carvalho **Hanover** e Gianduia Trama/Natural já estavam cadastrados e mantêm seus IDs e preços.
+
+Freijó Imperial Thera 15 mm: R$ 585,33 no [Gasômetro](https://www.madeirasgasometro.com.br/mdf-duratex-bp-thera-freijo-imperial-15mm/p), R$ 479,90 na [Leo](https://checkout.leomadeiras.com.br/mdf-freijo-imperial-thera-duratex-15mm-x-2750x1850mm-x-2-faces/p) e R$ 558,03 na [Madeiramar](https://www.madeiramar.com.br/mdf/madeirados/desing/mdf-freijo-imperial-thera-15mm-2f-275x185-1-11056/); média arredondada de R$ 540. Cinza Sagrado Essencial 15 mm: R$ 537,22 no [Gasômetro](https://www.madeirasgasometro.com.br/mdf-duratex-essencial-cinza-sagrado-15mm/p), referência de R$ 535. Outras espessuras desses dois padrões seguem a estimativa abaixo. Cristallo fica com **preço a cadastrar**, sem reaproveitar o preço de outro acabamento. Valores já ajustados pela oficina não são substituídos.
+
 Pesquisa inicial de 17/11/2026 para o catálogo do Bancada. Valores em reais por chapa inteira, em geral perto de 2,75 × 1,85 m, sem frete, corte ou fita de borda. Usei o preço anunciado à vista ou no Pix quando disponível. A disponibilidade e as condições variam por loja e CEP.
 
 O catálogo distingue três casos:

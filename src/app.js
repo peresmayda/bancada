@@ -140,6 +140,9 @@ function defMdf(){
       ['Gianduia Trama',[6,15,18],{6:[222.76],15:[430.56,407.78],18:[418.77]}],
       ['Gianduia Natural',[6,15,18,25],{15:[578.37]}],
       ['Freijó Puro',[6,15,18,25],{15:[498.72,581.79]}],
+      ['Freijó Imperial Thera',[6,15,18,25],{15:[585.33,479.90,558.03]},null,3],
+      ['Cinza Sagrado Essencial',[6,15,18,25],{15:[537.22]},null,3],
+      ['Cinza Sagrado Cristallo',[15,18],{},null,3],
       ['Carvalho Hanover',[15,18,25],{15:[551.9],18:[702.56],25:[1055.22]}]
     ]],
     ['Guararapes',[
@@ -175,23 +178,24 @@ function defMdf(){
       var samples=priceList[mm],preco=Math.round((samples?avg(samples):base*factors[mm])/5)*5;
       var m={id:id,marca:marca,padrao:padrao,espessura:mm,nome:'MDF '+padrao+' '+marca+' '+mm+' mm',preco:preco,
         precoRef:samples?(samples.length>1?'media':'anuncio'):'estimativa'};
+      if(!Number.isFinite(preco)||preco<=0){m.preco=null;delete m.precoRef}
+      if(p[4])m.catalogAdded=p[4];
       if(id==='mdf-duratex-gianduia-trama-15')m.mobcloud='MDF 15 mm Gianduia Trama 2F Duratex';
       return m;
     });
   })});
 }
 function migrateMdf(C){
-  if(C.mdfCatalogV>=2)return;
-  function nameKey(name){return mobcloudMaterialName(name||'').split(' ').sort().join(' ')}
-  var ids=new Set(C.chapas.map(function(m){return m.id}));
-  var names=new Set(C.chapas.map(function(m){return nameKey(m.nome)}));
+  if(C.mdfCatalogV>=3)return;
+  var version=C.mdfCatalogV||0;
   defMdf().forEach(function(m){
-    if(C.mdfCatalogV===1){
-      var current=C.chapas.find(function(x){return x.id===m.id});
-      if(current&&current.preco==null){current.preco=m.preco;current.precoRef=m.precoRef}
-    }else if(!ids.has(m.id)&&!names.has(nameKey(m.nome))&&(!m.mobcloud||!names.has(nameKey(m.mobcloud))))C.chapas.push(m);
+    var current=C.chapas.find(function(x){return x.id===m.id});
+    if(current){if(version===1&&current.preco==null){current.preco=m.preco;current.precoRef=m.precoRef}return}
+    if(version>=1&&m.catalogAdded!==3)return;
+    var identity=materialIdentity(m.nome);
+    if(!C.chapas.some(function(x){return materialIdentity(x.nome).key===identity.key}))C.chapas.push(m);
   });
-  C.mdfCatalogV=2;
+  C.mdfCatalogV=3;
 }
 function chapaGroup(m){return m.marca||'Cadastro da oficina'}
 function chapaGroups(list){return Array.from(new Set(list.map(chapaGroup)))}
@@ -1490,15 +1494,77 @@ function mobcloudComponentChanged(input,index){
   if(mobcloudCountUnit(product)){if(!qty.value)qty.value=row.qty}
   else if(n(qty.value)===row.qty)qty.value='';
 }
+// Compare material specifications, never piece labels. Missing specifications need review.
+function materialIdentity(name){
+  var text=mobcloudKey(String(name||'')).replace(/\b(?:frejo|freijo)\b/g,'freijo').replace(/\bhannover\b/g,'hanover')
+    .replace(/\bdrtx\b/g,'duratex').replace(/\bvelluto\b/g,'natural').replace(/\bsense\b/g,'puro')
+    .replace(/alto\s+brilho/g,'cristallo').replace(/essencial\s+wood/g,' ');
+  var mm=text.match(/\b(\d+(?:[.,]\d+)?)\s*mm\b/),dims=text.match(/\b\d{3,4}\s*[x×]\s*\d{3,4}\s*[x×]\s*(\d+(?:[.,]\d+)?)/);
+  var thickness=mm?Number(mm[1].replace(',','.')):dims?Number(dims[1].replace(',','.')):0;
+  var brand=(text.match(/\b(duratex|guararapes|arauco|berneck|greenplac|eucatex)\b/)||[])[1]||'';
+  var substrate=(text.match(/\b(mdf|mdp)\b/)||[])[1]||'';
+  var tokens=text.replace(/\d+(?:[.,]\d+)?\s*[x×]\s*\d+(?:[.,]\d+)?(?:\s*[x×]\s*\d+(?:[.,]\d+)?)?/g,' ')
+    .replace(/\b\d+(?:[.,]\d+)?\s*mm\b/g,' ').replace(/\b(?:mdf|mdp|bp|chapa|chapas|duratex|guararapes|arauco|berneck|greenplac|eucatex|mm|2f|1f|faces|face|duas|wood|design|linha)\b/g,' ')
+    .replace(/[^a-z]+/g,' ').trim().split(/\s+/).filter(Boolean);
+  tokens=Array.from(new Set(tokens)).sort();
+  return {brand:brand,thickness:thickness,substrate:substrate,tokens:tokens,key:[substrate,brand,thickness,tokens.join(' ')].join(':')};
+}
+function importMaterialMatches(type,item,items,saved){
+  var source=materialIdentity(item.name),normalized=mobcloudMaterialName(item.name);
+  var stored=(saved||{})[item.key]||(saved||{})[type+':'+normalized]||(type==='chapas'?(saved||{})[type+':identity:'+source.key]:'');
+  var ranked=items.map(function(m){
+    var target=materialIdentity(m.nome),conflict=type==='chapas'&&(
+      source.brand&&target.brand&&source.brand!==target.brand||source.thickness&&target.thickness&&source.thickness!==target.thickness||
+      source.substrate&&target.substrate&&source.substrate!==target.substrate);
+    var common=source.tokens.filter(function(t){return target.tokens.includes(t)}).length;
+    var same=source.tokens.length>0&&source.tokens.join(' ')===target.tokens.join(' ');
+    var exact=mobcloudMaterialName(m.nome)===normalized||m.mobcloud&&mobcloudMaterialName(m.mobcloud)===normalized;
+    var compatible=!conflict&&same;
+    return {product:m,score:conflict?0:exact?100:compatible?90:common?60*common/Math.max(source.tokens.length,target.tokens.length):0,
+      auto:!conflict&&(exact||type==='chapas'&&compatible&&source.thickness>0&&!!target.thickness),remembered:!conflict&&m.id===stored};
+  }).filter(function(r){return r.score>0}).sort(function(a,b){return b.score-a.score||a.product.nome.localeCompare(b.product.nome)});
+  var learned=ranked.find(function(r){return r.remembered}),automatic=ranked.filter(function(r){return r.auto});
+  return {ranked:ranked,mapped:learned?learned.product.id:automatic.length===1?automatic[0].product.id:'',remembered:!!learned};
+}
+function createImportedMaterial(type,values){
+  if(!['chapas','fitas','itens'].includes(type))throw Error('Tipo de material inválido.');
+  var name=String(values.nome||'').trim(),price=Number(String(values.preco).replace(',','.'));
+  if(!name||name.length>200||String(values.preco).trim()===''||!Number.isFinite(price)||price<=0)throw Error('Informe o nome e um preço maior que zero.');
+  var identity=materialIdentity(name),mm=Number(values.espessura)||identity.thickness;
+  if(type==='chapas'){
+    if(identity.thickness&&mm!==identity.thickness)throw Error('A espessura deve coincidir com a informada no nome.');
+    if(!(mm>0&&mm<=100))throw Error('Confirme a espessura em mm no nome ou no campo de espessura.');
+    if(!identity.thickness){name+=' '+mm+' mm';identity=materialIdentity(name)}
+  }
+  var list=S.config[type==='itens'?'materiais':type];
+  var existing=list.find(function(m){return type==='chapas'?materialIdentity(m.nome).key===identity.key:mobcloudMaterialName(m.nome)===mobcloudMaterialName(name)});
+  if(existing){if(!(n(existing.preco)>0))existing.preco=price;return existing;}
+  var m={id:uid(),nome:name,preco:price};
+  if(type==='chapas'){m.espessura=mm;m.marca=identity.brand?identity.brand[0].toUpperCase()+identity.brand.slice(1):'Cadastro da oficina';}
+  if(type==='fitas'){m.metros=Number(values.metros);if(!(m.metros>0))throw Error('Informe os metros por rolo.');}
+  if(type==='itens'){m.un=String(values.un||'').trim();if(!m.un)throw Error('Informe a unidade de compra.');}
+  list.push(m);return m;
+}
+function importQuickCreate(button){
+  if(readOnly)return;
+  var type=button.dataset.type,index=Number(button.dataset.index),id='mob-'+type+'-'+index;
+  try{
+    var product=createImportedMaterial(type,{nome:val(id+'-new-name'),preco:val(id+'-new-price'),espessura:val(id+'-new-mm'),metros:val(id+'-new-metres'),un:val(id+'-new-unit')});
+    if(!persistState()){toast('Não foi possível gravar o catálogo. Exporte um backup antes de sair.');return}
+    var select=$('#'+id),option=Array.from(select.options).find(function(o){return o.value===product.id});
+    if(!option){option=document.createElement('option');option.value=product.id;option.textContent=product.nome;select.appendChild(option)}
+    option.hidden=false;select.value=product.id;
+    if(type==='itens')mobcloudComponentChanged(select,index);
+    button.closest('details').open=false;toast('Material disponível no catálogo e selecionado.');
+  }catch(e){toast(e.message)}
+}
 function mobcloudPreview(report){
   ui.mobcloud=report;
   var saved=S.config.mobcloudMap||{};
   function options(type,item,index){
     var items=S.config[type==='itens'?'materiais':type],id='mob-'+type+'-'+index;
-    var normalized=mobcloudMaterialName(item.name),stored=saved[item.key]||saved[type+':'+normalized];
-    var exact=items.filter(function(m){return mobcloudMaterialName(m.nome)===normalized});
-    if(!exact.length&&type==='chapas')exact=items.filter(function(m){return m.mobcloud&&mobcloudMaterialName(m.mobcloud)===normalized});
-    var mapped=items.some(function(m){return m.id===stored})?stored:(exact.length===1?exact[0].id:'');
+    var match=importMaterialMatches(type,item,items,saved),mapped=match.mapped;
+    var suggestions=match.ranked.slice(0,6).map(function(r){return r.product});
     var choices=type==='chapas'?null:items.map(function(m){return [m.id,m.nome+(type==='fitas'?' · rolo '+dec(m.metros,0)+' m':' · '+(m.un||'un.'))+' · '+brl(m.preco)]});
     if(type==='itens')choices.push(['__skip__','Não lançar neste rascunho']);
     var qty=type==='fitas'?(item.ambiguous?dec(item.qty,2)+' no PDF, unidade a conferir':dec(item.metros==null?item.qty:item.metros,2)+' m de fita'):
@@ -1507,13 +1573,19 @@ function mobcloudPreview(report){
     var product=items.find(function(m){return m.id===mapped});
     var confirmation=type==='chapas'?field('Chapas para orçar',id+'-qty',item.estimated||!item.ambiguous?item.qty:'',{type:'number',step:'1'}):type==='fitas'&&item.ambiguous?field('Metros para orçar',id+'-qty','',{type:'number',step:'0.01'}):
       type==='itens'?field('Quantidade na unidade do catálogo',id+'-qty',!item.ambiguous&&(report.origem?product&&mobcloudKey(product.un||'un.')===mobcloudKey(item.unit):mobcloudCountUnit(product))?item.qty:'',{type:'number',step:'any'}):'';
-    var picker=type==='chapas'?'<div class="field"><label for="'+id+'">'+label+'</label><select class="in" id="'+id+'"><option value="">Selecione o equivalente</option>'+chapaOpts(items,mapped)+'</select></div>':
+    var picker=type==='chapas'?'<div class="field"><label for="'+id+'">'+label+'</label><select class="in" id="'+id+'"><option value="">Selecione o equivalente</option>'+(suggestions.length?'<optgroup label="Sugestões para este material">'+suggestions.map(function(m){return '<option value="'+esc(m.id)+'"'+(m.id===mapped?' selected':'')+'>'+esc(m.nome+' — '+chapaPrice(m))+'</option>'}).join('')+'</optgroup>':'')+chapaOpts(items.filter(function(m){return !suggestions.some(function(s){return s.id===m.id})}),mapped)+'</select></div>':
       selectF(label,id,mapped,[['','Selecione o equivalente']].concat(choices));
     return '<div class="sec"><p><b>'+esc(item.name)+'</b></p><p class="muted small">'+esc(qty)+'</p>'+
       '<p class="muted small">Material: confiança '+(item.grade||'alta')+'. Quantidade: '+(item.estimated?'estimada, confira':item.ambiguous?'a confirmar':'lida do arquivo')+'.</p>'+
       (item.area?'<p class="muted small">Área identificada: '+dec(item.area,3)+' m². Quantidade estimada por área, sem otimizar o corte. Confira o plano de corte e as perdas.</p>':'')+
       (item.extra?pill('warn','Não incluso na produção'):'')+
-      '<div class="fgrid">'+picker+confirmation+'</div></div>';
+      '<p class="muted small">'+(mapped?(match.remembered?'Associação já confirmada em uma importação anterior.':'Equivalente identificado; confira padrão, acabamento e espessura.'):'Confira as sugestões. Marca, acabamento ou espessura ausentes podem exigir escolha manual.')+'</p>'+
+      '<div class="field"><label for="'+id+'-search">Buscar no catálogo</label><input class="in" type="search" id="'+id+'-search" data-import-search="'+id+'" placeholder="Nome, marca ou espessura"></div>'+
+      '<div class="fgrid">'+picker+confirmation+'</div>'+
+      '<details><summary>Não encontrou? Cadastrar este material</summary><p class="muted small">Confira o nome e o custo de compra. O cadastro fica disponível nas próximas importações.</p><div class="fgrid">'+
+      field('Nome do material',id+'-new-name',item.name)+field(type==='fitas'?'Preço por rolo (R$)':type==='chapas'?'Preço por chapa (R$)':'Preço por unidade de compra (R$)',id+'-new-price','',{type:'number',step:'0.01'})+
+      (type==='chapas'?field('Espessura (mm)',id+'-new-mm',materialIdentity(item.name).thickness||'',{type:'number',step:'any'}):type==='fitas'?field('Metros por rolo',id+'-new-metres','',{type:'number',step:'any'}):field('Unidade de compra',id+'-new-unit',item.unit||'un.'))+
+      '</div><button class="btn btn-sm" data-act="importQuickCreate" data-type="'+type+'" data-index="'+index+'">Cadastrar e selecionar</button></details></div>';
   }
   var source={corte:'Plano de corte',orcamento:'Orçamento',combinado:'Orçamento e plano de corte'}[report.tipo];
   openModal({title:'Conferir materiais importados',wide:true,
@@ -1522,7 +1594,7 @@ function mobcloudPreview(report){
       (report.chapas.some(function(r){return r.estimated})?'<div class="sec"><h2>Estimativa de chapas</h2><div class="fgrid">'+field('Comprimento da chapa (mm)','material-sheet-c',2750,{type:'number',step:'any'})+field('Largura da chapa (mm)','material-sheet-l',1850,{type:'number',step:'any'})+field('Aproveitamento estimado (%)','material-sheet-use',85,{type:'number',step:'any'})+'</div><button class="btn btn-sm" data-act="materialRecalc">Recalcular quantidades estimadas</button><p class="muted small">A estimativa por área não garante que as peças caibam no corte. Para materiais de tamanhos diferentes, ajuste cada quantidade abaixo conforme o plano.</p></div>':'')+
       (report.semMaterial?'<p class="alert warn">Há linhas sem material identificado. Elas não entram nesta lista; confira os materiais ausentes com o projetista.</p>':'')+
       (report.producao||report.venda?'<p class="muted small">Referência do PDF: produção '+esc(report.producao||'—')+' · venda '+esc(report.venda||'—')+'. O preço do rascunho usa o catálogo do Bancada.</p>':'')+
-      '<p class="muted small">Associe cada material ao catálogo do Bancada. Cadastre os equivalentes que faltarem em Ajustes.</p>'+
+      '<p class="muted small">Associe cada material ao catálogo do Bancada. Busque por nome, marca ou espessura. Se faltar um equivalente, cadastre aqui mesmo.</p>'+
       report.chapas.map(function(row,i){return options('chapas',row,i)}).join('')+report.fitas.map(function(row,i){return options('fitas',row,i)}).join('')+
       report.itens.map(function(row,i){return options('itens',row,i)}).join('')+
       '<label class="chk"><input type="checkbox" id="mob-estimate"'+(ui.importDraft&&(n(ui.importDraft.horasOficina)||n(ui.importDraft.horasInstalacao))?'':' checked')+'> Sugerir horas de oficina e instalação pelas chapas</label>'+
@@ -1560,6 +1632,7 @@ function applyMobcloud(){
       var qty=type==='chapas'?n(val(fieldId+'-qty')):type==='fitas'&&!source.ambiguous?(source.metros==null?source.qty:source.metros):n(val(fieldId+'-qty'));
       if(!Number.isFinite(qty)||qty<=0||type==='chapas'&&!Number.isSafeInteger(qty)){toast('Confira a quantidade de '+source.name+'.');return}
       mapped[source.key]=mapped[type+':'+mobcloudMaterialName(source.name)]=id;
+      if(type==='chapas')mapped[type+':identity:'+materialIdentity(source.name).key]=id;
       matches.set(id,(matches.get(id)||0)+qty);
     }
     d[type]=Array.from(matches,function(pair){
@@ -2682,6 +2755,7 @@ var A={
   mobcloudCatalog:function(){
     closeModal();ui.aTab='materiais';location.hash='#ajustes';render();cfgLive();
   },
+  importQuickCreate:importQuickCreate,
   mobcloudApply:applyMobcloud,
   newQuote:function(){ui.importDraft=null;ui.step=0;ui.quoteId='new';ui.draft=newDraft();location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
   newQuoteFor:function(b){ui.importDraft=null;closeModal();ui.step=0;ui.quoteId='new';ui.draft=newDraft(b.dataset.id);location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
@@ -2949,6 +3023,7 @@ document.addEventListener('input',function(e){
   if(cloudEnabled&&(!S||readOnly))return;
   var t=e.target;
   if(t.id&&t.id.startsWith('cx-rate-')){readCxRates();return}
+  if(t.dataset&&t.dataset.importSearch){var select=$('#'+t.dataset.importSearch),terms=mobcloudKey(t.value).replace(/hannover/g,'hanover').replace(/frejo/g,'freijo').split(/\s+/).filter(Boolean);Array.from(select.options).forEach(function(o){o.hidden=!!o.value&&o.value!==select.value&&!terms.every(function(term){return mobcloudKey(o.textContent).includes(term)})});return}
   if(t.id==='material-search'){$('#material-results').innerHTML=materialResults(t.value);return}
   if(t.id==='ap-forma'||t.id==='ap-prim'||t.id==='ap-ent'){apCx();return}
   if(t.id==='q-search'){ui.qSearch=t.value;var p=t.selectionStart;render();var s=$('#q-search');s.focus();try{s.setSelectionRange(p,p)}catch(x){}return}
