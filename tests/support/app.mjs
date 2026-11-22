@@ -14,7 +14,7 @@ export function app() {
   runInNewContext(source.slice(0, end) + `
     S=seed();
     openModal=function(spec){window.modal=spec};
-    window.api={materialIdentity,importMaterialMatches,createImportedMaterial,migrateMdf,defMdf,mobcloudPreview,pieceTable,materialTable,projectMaterials,estimateMaterialSheets,reviewProjectImport,
+    window.api={cancelApprovedQuote,restoreApprovedQuote,clientArchiveRecord,aprovar,viewQuote,vOrcamentos,vObras,vInicio,clientTrash,openCliente,materialIdentity,importMaterialMatches,createImportedMaterial,migrateMdf,defMdf,mobcloudPreview,pieceTable,materialTable,projectMaterials,estimateMaterialSheets,reviewProjectImport,
       oficina,calcQuote,calcCond,quoteLabor,laborResources,newDraft,reviewHTML,sideHTML,vEditor,live,ui,restoreDraftLabor,profitDefaults,ensureFixedBills,fixedBillDate,cxReserve,cxMonthly,cxMonthCard,dGeral,dPagar,CX,mesAtual,cxPayments,saveClientRecord,clientContact,quoteDeleteReason,deleteQuoteRecord,restoreQuoteRecord,importedDraftBase,proposalData,proposalHTML,companySurvival,vClientes,readBackup,
       getState:function(){return S},setState:function(state){S=state}};
   })();`, context);

@@ -96,3 +96,10 @@
 A conferência sugere equivalentes por padrão, marca, espessura e acabamento; reconhece Frejó/Freijó, Hannover/Hanover, Velluto/Natural e a ordem dos termos. Apenas equivalentes únicos com especificação suficiente são selecionados automaticamente. Marca, MDF/MDP e espessura incompatíveis impedem a seleção automática. As associações confirmadas ao concluir a importação ficam guardadas para as próximas listas, inclusive quando os termos mudam de ordem.
 
 Cada material tem busca no catálogo e cadastro de chapa, fita ou componente sem abandonar a conferência. Nome e especificações vêm do arquivo; custo positivo e unidade/metros por rolo devem ser confirmados. O cadastro passa a fazer parte da oficina. Não se criam compras a partir de nomes de peças nem preços inventados. A atualização do catálogo preserva preços e IDs existentes.
+
+## Cancelamento de aprovados e exclusão de clientes
+
+- Orçamento aprovado pode ser cancelado na ficha do orçamento ou do projeto, informando motivo. O projeto sai do andamento e dos indicadores de venda e lucro previsto. O contrato original e os gastos permanecem preservados.
+- Na confirmação, é possível retirar as parcelas ainda não recebidas da cobrança. Elas ficam guardadas no cancelamento para consulta e recuperação. Recebimentos, separações e todas as contas a pagar são mantidos. Devoluções, saldos devidos e acertos com fornecedores são decisões explícitas no financeiro.
+- Desfazer o cancelamento restaura a etapa e as parcelas com IDs, valores e vencimentos originais, uma única vez. Guarda motivo, data do cancelamento e data da restauração. Versões anteriores da mesma proposta não podem ser aprovadas enquanto houver contrato aprovado ou cancelado vinculado.
+- Excluir cliente é recuperável: remove o cadastro da lista e da seleção de novos orçamentos. Nome e vínculos de projetos, propostas e cobranças continuam acessíveis pelo histórico. Clientes excluídos podem ser restaurados. A ficha permite editar nome, telefone, e-mail, endereço e observações e salvar alterações, preservando propostas já enviadas.

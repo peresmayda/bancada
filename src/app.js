@@ -3,7 +3,7 @@
 'use strict';
 var HEAD='<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Bancada</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">';
 var ETAPAS=['Projeto final','Compra de material','Produção','Instalação','Entregue'];
-var STATUS={rascunho:'Rascunho',enviado:'Enviado',aprovado:'Aprovado',perdido:'Perdido'};
+var STATUS={rascunho:'Rascunho',enviado:'Enviado',aprovado:'Aprovado',perdido:'Perdido',cancelado:'Cancelado'};
 var MOTIVOS=['Preço','Prazo','Fechou com outro','Desistiu','Sem resposta'];
 var VINCULOS=['CLT','Diarista','Mensalista / MEI','Empreitada'];
 var SITUACOES=['Ativo','Férias','Afastado','Desligado'];
@@ -281,7 +281,7 @@ function migrate(){
     delete C.horasPorKit;
     if(C.horasDia==null)C.horasDia=8;
     if(C.pessoasProjeto==null)C.pessoasProjeto=2;
-    S.orcamentos.forEach(function(q){normQ(q);if(q.status!=='aprovado')q.precoSalvo=calcQuote(q).preco});
+    S.orcamentos.forEach(function(q){normQ(q);if(q.status!=='aprovado'&&q.status!=='cancelado')q.precoSalvo=calcQuote(q).preco});
     S.v=3;
   }
   migrateMdf(S.config);
@@ -459,7 +459,7 @@ function restoreDraftLabor(q){
   q.maoModo='rapido';
 }
 function sugHoras(d){var C=S.config;var ch=(d.chapas||[]).reduce(function(a,r){return a+n(r.qtd)},0);var of=Math.round(ch*n(C.horasPorChapa));return {ch:ch,of:of,inst:Math.round(of*n(C.instalacaoPct)/100)}}
-function mediaReal(){var h=0,ch=0;S.obras.forEach(function(o){var r=o.realizado||{};if(!r.fechado||!n(r.horas))return;var q=quote(o.quoteId);if(!q)return;var c=(q.chapas||[]).reduce(function(a,x){return a+n(x.qtd)},0);if(!c)return;h+=n(r.horas)/(1+n(S.config.instalacaoPct)/100);ch+=c});return ch?{hpc:h/ch,obras:ch}:null}
+function mediaReal(){var h=0,ch=0;S.obras.forEach(function(o){if(o.cancelamento)return;var r=o.realizado||{};if(!r.fechado||!n(r.horas))return;var q=quote(o.quoteId);if(!q)return;var c=(q.chapas||[]).reduce(function(a,x){return a+n(x.qtd)},0);if(!c)return;h+=n(r.horas)/(1+n(S.config.instalacaoPct)/100);ch+=c});return ch?{hpc:h/ch,obras:ch}:null}
 function isAuto(v){return v===''||v===null||v===undefined}
 function calcQuote(q){
   var C=S.config;normQ(q);
@@ -545,7 +545,7 @@ function saveClientRecord(values,id){
   var name=String(values.nome||'').trim();
   if(!name)return {error:'Informe o nome do cliente.'};
   var duplicate=S.clientes.find(function(c){return c.id!==id&&mobcloudKey(c.nome||'')===mobcloudKey(name)});
-  if(duplicate)return {error:'Já existe um cliente com esse nome. Abra o cadastro existente para editar.'};
+  if(duplicate)return {error:duplicate.excluidoEm?'Este cliente está em Clientes excluídos. Restaure o cadastro para usá-lo novamente.':'Já existe um cliente com esse nome. Abra o cadastro existente para editar.'};
   var c=id&&cliente(id);
   if(id&&!c)return {error:'Cliente não encontrado.'};
   var previous=c&&c.endereco||'';
@@ -558,6 +558,49 @@ function saveClientRecord(values,id){
     if(!address||address===previous)q.contato.endereco=c.endereco;
   });
   return {client:c};
+}
+function cancelApprovedQuote(id,reason,cancelPending){
+  var q=quote(id),o=q&&obra(q.obraId),motivo=String(reason||'').trim();
+  if(!q||q.status!=='aprovado'||!o||o.cancelamento)return {error:'Este orçamento não tem um projeto aprovado ativo.'};
+  if(!motivo||motivo.length>1000)return {error:'Informe o motivo do cancelamento, com até 1.000 caracteres.'};
+  var pending=cancelPending?S.receber.filter(function(r){return r.obraId===o.id&&r.status!=='recebido'}):[];
+  o.cancelamento={data:today(),motivo:motivo,parcelas:clone(pending)};
+  S.receber=S.receber.filter(function(r){return !pending.includes(r)});
+  q.status='cancelado';q.canceladoEm=o.cancelamento.data;
+  return {quote:q,project:o};
+}
+function restoreApprovedQuote(id){
+  var q=quote(id),o=q&&obra(q.obraId);
+  if(!q||q.status!=='cancelado'||!o||!o.cancelamento)return {error:'Cancelamento não encontrado.'};
+  var pending=o.cancelamento.parcelas||[];
+  if(pending.some(function(r){return S.receber.some(function(x){return x.id===r.id})}))return {error:'Há parcelas já existentes. Confira o financeiro antes de restaurar.'};
+  S.receber.push.apply(S.receber,clone(pending));
+  o.historicoCancelamentos=o.historicoCancelamentos||[];
+  o.historicoCancelamentos.push(Object.assign({},o.cancelamento,{restauradoEm:today()}));
+  delete o.cancelamento;delete q.canceladoEm;q.status='aprovado';
+  return {quote:q,project:o};
+}
+function clientArchiveRecord(id,restore){
+  var c=cliente(id);if(!c)return {error:'Cliente não encontrado.'};
+  if(restore)delete c.excluidoEm;else c.excluidoEm=today();
+  return {client:c};
+}
+function clientTrash(){
+  var list=S.clientes.filter(function(c){return c.excluidoEm});
+  openModal({title:'Clientes excluídos',body:'<p class="muted small">Os históricos e lançamentos continuam preservados. Restaure para usar o cadastro novamente.</p>'+list.map(function(c){return '<div class="row"><div><b>'+esc(c.nome)+'</b><p class="muted small">Excluído em '+fd(c.excluidoEm)+'</p></div><button class="btn btn-sm" data-act="restoreClient" data-id="'+c.id+'">Restaurar</button></div>'}).join('')+(!list.length?'<p>Nenhum cliente excluído.</p>':'')});
+}
+function cancellationDetails(o){
+  var c=o.cancelamento;if(!c)return '';
+  var paid=S.receber.filter(function(r){return r.obraId===o.id&&r.status==='recebido'}).reduce(function(a,r){return a+n(r.bruto)},0);
+  var pending=S.pagar.filter(function(p){return p.obraId===o.id&&p.status!=='pago'}).reduce(function(a,p){return a+n(p.valor)},0);
+  return '<div class="alert warn"><b>Cancelado em '+fd(c.data)+'</b><p>'+esc(c.motivo)+'</p><p class="small">'+(c.parcelas||[]).length+' parcela(s) retirada(s) da cobrança. Já recebido: '+brl(paid)+'. Contas a pagar mantidas: '+brl(pending)+'. Confira o acerto com o cliente, fornecedores e eventual devolução no financeiro.</p></div>'+
+    ((c.parcelas||[]).length?'<details><summary>Parcelas canceladas</summary><div class="list">'+c.parcelas.map(function(r){return '<p>'+esc(r.desc||'Parcela')+' · '+fd(r.venc)+' · '+brl(r.bruto)+'</p>'}).join('')+'</div></details>':'');
+}
+function confirmCancellation(id){
+  var q=quote(id),o=q&&obra(q.obraId);if(!o||q.status!=='aprovado')return;
+  var pending=S.receber.filter(function(r){return r.obraId===o.id&&r.status!=='recebido'});
+  openModal({title:'Cancelar orçamento aprovado',body:'<p><b>'+esc(q.titulo||o.titulo)+'</b></p><p>O projeto sairá do andamento. A proposta, os recebimentos e todas as contas a pagar serão preservados.</p>'+field('Motivo do cancelamento','cancel-reason','',{type:'textarea'})+
+    '<label class="chk"><input type="checkbox" id="cancel-pending" checked> Retirar da cobrança as '+pending.length+' parcelas ainda não recebidas ('+brl(pending.reduce(function(a,r){return a+n(r.bruto)},0))+')</label><p class="muted small">Desmarque se o cliente ainda deve pagar essas parcelas. Devoluções e acertos devem ser registrados separadamente no financeiro. Você pode desfazer este cancelamento.</p>',foot:'<button class="btn" data-act="viewQuote" data-id="'+id+'">Voltar</button><button class="btn btn-danger" data-act="confirmCancelQuote" data-id="'+id+'">Confirmar cancelamento</button>'});
 }
 function quoteDeleteReason(q){
   if(!q)return 'Orçamento não encontrado.';
@@ -613,7 +656,7 @@ function materialResults(search){
 }
 function approvedRevision(q){
   var root=q.revisaoRaiz||q.id;
-  return S.orcamentos.some(function(x){return x.status==='aprovado'&&(x.revisaoRaiz||x.id)===root});
+  return S.orcamentos.some(function(x){return (x.status==='aprovado'||x.status==='cancelado')&&(x.revisaoRaiz||x.id)===root});
 }
 function awaitingQuotes(){
   var latest=new Map();
@@ -650,7 +693,7 @@ function netPayment(cents,taxa){
   return Math.round(cents*(1-n(taxa)/100));
 }
 function aprovar(q,o){
-  if(approvedRevision(q))return null;
+  if(!q||!['rascunho','enviado'].includes(q.status)||approvedRevision(q))return null;
   var proposal=q.proposta||proposalData(q,q.enviadoEm||o.data);
   if(proposal.error)return null;
   var c=proposal.calc,cd=proposal.condicoes.find(function(x){return x.forma.id===o.formaId});
@@ -742,6 +785,7 @@ function apCx(){
     (fee?'<td class="r"><b>'+brl(net/100)+'</b></td>':'')+'</tr></tfoot></table></div>';
 }
 function lucroReal(ob){
+  if(ob.cancelamento)return null;
   var r=ob.realizado||{};if(!r.fechado)return null;
   var trabalho=ob.rateioDiaPrev==null?n(r.horas)*n(ob.custoHora):n(r.horas)*n(ob.horaDireta)+n(ob.rateioDiaPrev);
   var custo=n(r.material)+trabalho+n(ob.terceirosFrete)+n(r.extras);
@@ -801,7 +845,7 @@ function vInicio(){
   var semana=S.receber.filter(function(r){return r.status!=='recebido'&&r.venc>=t&&r.venc<=addDays(t,7)});
   var atr=S.receber.filter(function(r){return recStatus(r)==='atrasado'});
   var aguardando=awaitingQuotes();
-  var andamento=S.obras.filter(function(o){return o.etapa<4});
+  var andamento=S.obras.filter(function(o){return !o.cancelamento&&o.etapa<4});
   /* Cobrar */
   var cobrar=atr.concat(semana).sort(function(a,b){return a.venc.localeCompare(b.venc)});
   var cobrarHTML=cobrar.map(function(r){return cobrarRow(r,t)}).join('');
@@ -861,14 +905,15 @@ function vOrcamentos(){
     var quando;
     if(q.status==='enviado'){var d=daysBetween(q.enviadoEm,t);quando='Enviado há '+d+' dia'+(d===1?'':'s')+(d>7?' · <span style="color:var(--warn);font-weight:600">sem resposta</span>':'')}
     else if(q.status==='rascunho')quando='Criado em '+fds(q.criadoEm)+' · ainda não enviado';
+    else if(q.status==='cancelado')quando='Cancelado em '+fds(q.canceladoEm);
     else if(q.status==='aprovado')quando='Aprovado em '+fds(q.aprovadoEm);
     else quando='Perdido · '+esc((q.motivoPerda||'sem motivo').toLowerCase())+(q.retomarEm?' · retomar '+fds(q.retomarEm):'');
     if(precoMudou(q))quando+=' · <span style="color:var(--warn);font-weight:600">preço mudou</span>';
     var valor=quotePrice(q);
     var aberto=(q.status==='rascunho'||q.status==='enviado')&&!approvedRevision(q);
     return '<div class="qrow" data-act="viewQuote" data-id="'+q.id+'" tabindex="0" role="button"><div><div class="t">'+esc(q.titulo||'Sem título')+'</div><div class="muted small">'+esc(nomeQ(q))+' · '+quando+'</div></div><span class="r">'+brl0(valor)+'</span><span>'+pill(q.status)+'</span><div class="qact"><button class="btn btn-sm" data-act="viewQuote" data-id="'+q.id+'">Ver</button>'+(q.status!=='aprovado'&&!approvedRevision(q)?'<button class="btn btn-sm" data-act="editQuote" data-id="'+q.id+'">Editar</button>':'')+(aberto?'<button class="btn btn-sm btn-primary" data-act="approveQuote" data-id="'+q.id+'">Aprovar</button>':'')+'</div></div>'}).join('');
-  var label={todos:'Todos os orçamentos',rascunho:'Rascunhos',enviado:'Enviados, aguardando resposta',aprovado:'Aprovados',perdido:'Perdidos'}[ui.qFilter];
-  return '<div class="page-head"><div><h1>Orçamentos</h1><p>Crie, edite e acompanhe as propostas dos seus clientes.</p></div><div class="actions">'+((S.orcamentosExcluidos||[]).length?'<button class="btn" data-act="quoteTrash">Lixeira ('+S.orcamentosExcluidos.length+')</button>':'')+'<button class="btn" data-act="mobcloudImport">Importar projeto</button><button class="btn btn-primary" data-act="newQuote"><span class="plus">+</span>Novo orçamento</button></div></div>'+
+  var label={todos:'Todos os orçamentos',rascunho:'Rascunhos',enviado:'Enviados, aguardando resposta',aprovado:'Aprovados',perdido:'Perdidos',cancelado:'Cancelados'}[ui.qFilter];
+  return '<div class="page-head"><div><h1>Orçamentos</h1><p>Crie, edite e acompanhe as propostas dos seus clientes.</p></div><div class="actions">'+(by('cancelado').length?'<button class="btn" data-act="qFilter" data-f="cancelado">Cancelados ('+by('cancelado').length+')</button>':'')+((S.orcamentosExcluidos||[]).length?'<button class="btn" data-act="quoteTrash">Lixeira ('+S.orcamentosExcluidos.length+')</button>':'')+'<button class="btn" data-act="mobcloudImport">Importar projeto</button><button class="btn btn-primary" data-act="newQuote"><span class="plus">+</span>Novo orçamento</button></div></div>'+
   '<div class="tiles">'+
    ft('rascunho','Rascunhos',ras.length,'ainda não enviados','')+
    ft('enviado','Enviados',env.length,brl0(tot(env))+' aguardando resposta','blue')+
@@ -1651,12 +1696,15 @@ function applyMobcloud(){
 }
 function viewQuote(id){
   var q=quote(id);if(!q)return;var c=q.proposta?q.proposta.calc:calcQuote(q);var C=S.config;
-  var aprovado=q.status==='aprovado'&&q.obraId&&obra(q.obraId);
+  var contrato=q.obraId&&obra(q.obraId),aprovado=q.status==='aprovado'&&contrato;
   var conds=q.proposta?q.proposta.condicoes:q.condicoes.map(forma).filter(Boolean).map(function(f){return calcCond(c,f)});
   var nChapas=(q.chapas||[]).reduce(function(a,r){return a+n(r.qtd)},0);
   normQ(q);var nItens=(q.itens||[]).filter(function(r){return n(r.qtd)>0}).length;
-  var info=q.status==='enviado'?'Enviado em '+fd(q.enviadoEm)+' · válido até '+fd(validaAte(q)):q.status==='rascunho'?'Rascunho criado em '+fd(q.criadoEm):q.status==='aprovado'?'Aprovado em '+fd(q.aprovadoEm):'Perdido por '+esc((q.motivoPerda||'—').toLowerCase());
+  var info=q.status==='enviado'?'Enviado em '+fd(q.enviadoEm)+' · válido até '+fd(validaAte(q)):q.status==='rascunho'?'Rascunho criado em '+fd(q.criadoEm):q.status==='aprovado'?'Aprovado em '+fd(q.aprovadoEm):q.status==='cancelado'?'Cancelado em '+fd(q.canceladoEm):'Perdido por '+esc((q.motivoPerda||'—').toLowerCase());
   var foot=[quoteActions(q)];
+  if(q.status==='aprovado')foot.push('<button class="btn btn-ghost" data-act="cancelQuote" data-id="'+id+'">Cancelar orçamento</button>');
+  if(q.status==='cancelado'&&q.proposta)foot.push('<button class="btn" data-act="showProposal" data-id="'+id+'">Proposta original</button>');
+  if(q.status==='cancelado')foot.push('<button class="btn" data-act="restoreCancelledQuote" data-id="'+id+'">Desfazer cancelamento</button><button class="btn" data-act="openObra" data-id="'+q.obraId+'">Ver histórico do projeto</button>');
   if(q.status!=='aprovado'&&!approvedRevision(q))foot.push('<button class="btn" data-act="editQuote" data-id="'+id+'">Editar</button>');
   if(!quoteDeleteReason(q))foot.push('<button class="btn btn-ghost" data-act="deleteQuote" data-id="'+id+'">Excluir orçamento</button>');
   if((q.status==='rascunho'||q.status==='enviado')&&!approvedRevision(q)){
@@ -1674,8 +1722,9 @@ function viewQuote(id){
   openModal({title:(q.titulo||'Sem título'),wide:true,body:
     '<div class="actions" style="justify-content:space-between"><div><b>'+esc(nomeQ(q))+'</b> <span class="muted">'+esc((q.contato&&q.contato.telefone)||'')+'</span><div class="muted small">'+info+'</div></div>'+pill(q.status)+'</div>'+
     (q.status==='enviado'?(q.proposta?'<div class="alert info">Condições arquivadas no envio. Para alterar, crie uma revisão.</div>':'<div class="alert warn">Enviado antes do arquivamento. Compare a prévia com a proposta original.</div>'):'')+
-    (!aprovado&&approvedRevision(q)?'<div class="alert info">Outra versão deste orçamento já foi aprovada.</div>':'')+
-    (c.valido?'<div class="kv"><div><span>Custo</span><b>'+brl0(c.custo)+'</b></div><div><span>'+(aprovado?'Fechado por':'Preço')+'</span><b>'+brl0(aprovado?aprovado.valor:c.preco)+'</b></div><div><span>Lucro da empresa</span><b style="color:var(--ok)">'+brl0(aprovado?aprovado.sobra:c.sobra)+'</b></div><div><span>Margem</span><b>'+pct(c.margem)+'</b></div></div>':'<div class="alert warn">Este orçamento ainda não tem preço. Abra para editar.</div>')+
+    (q.status==='cancelado'&&obra(q.obraId)?cancellationDetails(obra(q.obraId)):'')+
+    (!aprovado&&q.status!=='cancelado'&&approvedRevision(q)?'<div class="alert info">Outra versão deste orçamento já foi aprovada.</div>':'')+
+    (c.valido?'<div class="kv"><div><span>Custo</span><b>'+brl0(c.custo)+'</b></div><div><span>'+(contrato?(q.status==='cancelado'?'Contrato original':'Fechado por'):'Preço')+'</span><b>'+brl0(contrato?contrato.valor:c.preco)+'</b></div><div><span>'+(q.status==='cancelado'?'Lucro previsto no contrato':'Lucro da empresa')+'</span><b style="color:var(--ok)">'+brl0(contrato?contrato.sobra:c.sobra)+'</b></div><div><span>Margem</span><b>'+pct(c.margem)+'</b></div></div>':'<div class="alert warn">Este orçamento ainda não tem preço. Abra para editar.</div>')+
     (precoMudou(q)?'<div class="alert warn">Algum custo mudou depois que este orçamento foi salvo. Salvo por '+brl0(q.precoSalvo)+', hoje sai por '+brl0(c.preco)+'.</div>':'')+
     (c.margem<n(C.margemMinima)&&c.valido?'<div class="alert bad">Margem abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+
     '<div class="grid2"><div><h3 style="margin-bottom:6px">O que entra</h3><p class="small">'+dec(nChapas,0)+' chapa'+(nChapas===1?'':'s')+' · '+dec(c.fitaRolos,0)+' rolo'+(c.fitaRolos===1?'':'s')+' de fita · '+dec(nItens,0)+' ite'+(nItens===1?'m':'ns')+' de ferragem e insumos · '+dec(c.horas,0)+' h de mão de obra ('+dec(c.horas/horasDia(),1)+' dias de uma pessoa)'+(c.terceiros?' · terceiros '+brl0(c.terceiros):'')+(c.rt?' · RT '+pct(c.rt*100):'')+'</p>'+
@@ -1744,7 +1793,7 @@ var STEPS=['Cliente','Materiais','Mão de obra','Valor','Pagamento','Revisar'];
 function vEditor(){
   var d=ui.draft,C=S.config;normQ(d);d.descontos=d.descontos||{};var isNew=!quote(d.id);var locked=d.status==='aprovado';
   var st=locked?5:Math.min(Math.max(ui.step||0,0),5);ui.step=st;
-  var cOpts=[['','— Cliente novo —']].concat(S.clientes.map(function(c){return [c.id,c.nome]}));
+  var cOpts=[['','— Cliente novo —']].concat(S.clientes.filter(function(c){return !c.excluidoEm||c.id===d.clienteId}).map(function(c){return [c.id,c.nome]}));
   var sec='';
   if(st===0){
     sec='<div class="sec"><div class="sec-h"><h2>Para quem é e o que vai ser feito</h2></div>'+
@@ -1955,7 +2004,7 @@ function rerenderQ(){}
 function rerenderEditor(){var y=window.scrollY;$('#main').innerHTML=vEditor();live();window.scrollTo(0,y)}
 function openQuote(id){
   var q=quote(id);if(!q)return;
-  if(q.status==='enviado'||q.status==='perdido'){viewQuote(id);return}
+  if(q.status==='enviado'||q.status==='perdido'||q.status==='cancelado'){viewQuote(id);return}
   ui.quoteId=id;ui.step=0;ui.draft=clone(q);location.hash='#orcamentos';render();live();window.scrollTo(0,0)
 }
 function commitDraft(){
@@ -1974,7 +2023,7 @@ function copyQuote(id,revision){
   var source=quote(id);
   if(!source||readOnly||revision&&approvedRevision(source))return;
   var d=clone(source);
-  ['proposta','obraId','aprovadoEm','perdidoEm','motivoPerda','retomarEm','revisaoRaiz','revisaoDe'].forEach(function(k){delete d[k]});
+  ['proposta','obraId','aprovadoEm','perdidoEm','motivoPerda','retomarEm','revisaoRaiz','revisaoDe','canceladoEm'].forEach(function(k){delete d[k]});
   Object.assign(d,{id:uid(),numero:null,status:'rascunho',criadoEm:today(),enviadoEm:null});
   if(revision){d.revisaoRaiz=source.revisaoRaiz||source.id;d.revisaoDe=source.id}
   else{d.clienteId=null;d.contato=clientContact(null);d.titulo=(source.titulo||'Orçamento')+' (cópia)'}
@@ -2076,35 +2125,35 @@ function newClientModal(){
 }
 function vClientes(){
   var s=ui.cSearch.trim().toLowerCase();var t=today();
-  var list=S.clientes.filter(function(c){return !s||(c.nome+' '+c.telefone+' '+(c.email||'')+' '+(c.endereco||'')).toLowerCase().indexOf(s)>=0}).sort(function(a,b){return a.nome.localeCompare(b.nome)});
-  var head='<div class="page-head"><div><h1>Clientes</h1><p>Cadastre seus clientes e acompanhe os históricos, mesmo antes de um orçamento.</p></div><div class="actions"><button class="btn btn-primary" data-act="newCliente">Cadastrar cliente</button><input class="in search" id="c-search" type="search" placeholder="Buscar cliente" value="'+esc(ui.cSearch)+'" aria-label="Buscar clientes"></div></div>';
+  var list=S.clientes.filter(function(c){return !c.excluidoEm&&(!s||(c.nome+' '+c.telefone+' '+(c.email||'')+' '+(c.endereco||'')).toLowerCase().indexOf(s)>=0)}).sort(function(a,b){return a.nome.localeCompare(b.nome)});
+  var head='<div class="page-head"><div><h1>Clientes</h1><p>Cadastre seus clientes e acompanhe os históricos, mesmo antes de um orçamento.</p></div><div class="actions">'+(S.clientes.some(function(c){return c.excluidoEm})?'<button class="btn" data-act="clientTrash">Clientes excluídos</button>':'')+'<button class="btn btn-primary" data-act="newCliente">Cadastrar cliente</button><input class="in search" id="c-search" type="search" placeholder="Buscar cliente" value="'+esc(ui.cSearch)+'" aria-label="Buscar clientes"></div></div>';
   function card(c){
     var obs=S.obras.filter(function(o){return o.clienteId===c.id});
-    var total=obs.reduce(function(a,o){return a+o.valor},0);
+    var total=obs.filter(function(o){return !o.cancelamento}).reduce(function(a,o){return a+o.valor},0);
     var aberto=S.receber.filter(function(r){return r.clienteId===c.id&&r.status!=='recebido'}).reduce(function(a,r){return a+r.bruto},0);
     var atr=S.receber.some(function(r){return r.clienteId===c.id&&recStatus(r)==='atrasado'});
-    var emAnd=obs.filter(function(o){return o.etapa<4});
-    var st=!obs.length?pill('rascunho','Sem projetos'):emAnd.length?pill('brown',ETAPAS[emAnd[0].etapa]+(emAnd.length>1?' +'+(emAnd.length-1):'')):aberto>0.5?pill('enviado','Pagando'):pill('ok','Finalizado');
+    var emAnd=obs.filter(function(o){return !o.cancelamento&&o.etapa<4});
+    var st=!obs.length?pill('rascunho','Sem projetos'):emAnd.length?pill('brown',ETAPAS[emAnd[0].etapa]+(emAnd.length>1?' +'+(emAnd.length-1):'')):aberto>0.5?pill('enviado','Pagando'):obs.every(function(o){return o.cancelamento})?pill('warn','Projetos cancelados'):pill('ok','Finalizado');
     return '<button class="ccard" data-act="openCliente" data-id="'+c.id+'"><span class="t">'+esc(c.nome)+'</span><span class="muted small">'+esc(c.telefone||'Sem telefone')+'</span><span class="m"><span>'+obs.length+' projeto'+(obs.length===1?'':'s')+'</span><b>'+brl0(total)+'</b></span><span class="m"><span>Em aberto</span><b>'+brl0(aberto)+'</b></span><span class="pills" style="justify-content:flex-start">'+st+(atr?pill('bad','Parcela atrasada'):'')+'</span></button>'}
-  function ativo(c){return S.obras.some(function(o){return o.clienteId===c.id&&o.etapa<4})||S.receber.some(function(r){return r.clienteId===c.id&&r.status!=='recebido'})}
+  function ativo(c){return S.obras.some(function(o){return o.clienteId===c.id&&!o.cancelamento&&o.etapa<4})||S.receber.some(function(r){return r.clienteId===c.id&&r.status!=='recebido'})}
   var at=list.filter(ativo),pending=list.filter(function(c){return !S.obras.some(function(o){return o.clienteId===c.id})&&!ativo(c)}),fin=list.filter(function(c){return !ativo(c)&&S.obras.some(function(o){return o.clienteId===c.id})});
   function sec(t,sub,arr,empty){return '<div class="csec"><div class="csec-h"><h2>'+t+'</h2><span class="cnt">'+arr.length+'</span><span class="muted small">'+sub+'</span></div>'+(arr.length?'<div class="cards">'+arr.map(card).join('')+'</div>':'<p class="muted small">'+empty+'</p>')+'</div>'}
-  return head+(list.length?sec('Ativos','projeto em andamento ou parcelas a receber',at,'Nenhum cliente ativo agora.')+sec('Sem projetos','cadastros disponíveis para novos orçamentos',pending,'Nenhum cadastro sem projeto.')+sec('Finalizados','tudo entregue e pago',fin,'Ninguém finalizado ainda.'):'<div class="card"><div class="list"><div class="empty">Nenhum cliente cadastrado. Use Cadastrar cliente para começar, mesmo sem orçamento.</div></div></div>');
+  return head+(list.length?sec('Ativos','projeto em andamento ou parcelas a receber',at,'Nenhum cliente ativo agora.')+sec('Sem projetos','cadastros disponíveis para novos orçamentos',pending,'Nenhum cadastro sem projeto.')+sec('Finalizados','sem projetos em andamento ou parcelas em aberto',fin,'Ninguém finalizado ainda.'):'<div class="card"><div class="list"><div class="empty">'+(S.clientes.some(function(c){return c.excluidoEm})?'Nenhum cliente na lista. Consulte Clientes excluídos para restaurar um cadastro.':'Nenhum cliente cadastrado. Use Cadastrar cliente para começar, mesmo sem orçamento.')+'</div></div></div>');
 }
 function openCliente(id){
   var c=cliente(id);if(!c)return;
   var obs=S.obras.filter(function(o){return o.clienteId===id});
   var qs=S.orcamentos.filter(function(q){return q.clienteId===id&&q.status!=='aprovado'});
-  var total=obs.reduce(function(a,o){return a+o.valor},0);
+  var total=obs.filter(function(o){return !o.cancelamento}).reduce(function(a,o){return a+o.valor},0);
   var recebido=S.receber.filter(function(r){return r.clienteId===id&&r.status==='recebido'}).reduce(function(a,r){return a+r.bruto},0);
   var aberto=S.receber.filter(function(r){return r.clienteId===id&&r.status!=='recebido'}).reduce(function(a,r){return a+r.bruto},0);
   openModal({title:c.nome,wide:true,body:
     '<div class="kv"><div><span>Total comprado</span><b>'+brl0(total)+'</b></div><div><span>Já recebido</span><b>'+brl0(recebido)+'</b></div><div><span>Em aberto</span><b>'+brl0(aberto)+'</b></div><div><span>Cliente desde</span><b>'+fd(c.criadoEm)+'</b></div></div>'+
     '<div class="fgrid">'+field('Nome','cl-nome',c.nome)+field('WhatsApp','cl-tel',c.telefone)+field('E-mail','cl-email',c.email)+'</div>'+field('Endereço de instalação','cl-end',c.endereco)+field('Observações úteis','cl-obs',c.obs,{type:'textarea'})+
-    '<div class="hr"></div><h3>Projetos</h3><div class="list">'+(obs.length?obs.map(function(o){return '<div class="row" style="padding-left:0;padding-right:0"><div><div class="t">'+esc(o.titulo)+'</div><div class="d">'+ETAPAS[o.etapa]+' · '+brl(o.valor)+'</div></div><button class="btn btn-sm" data-act="openObra" data-id="'+o.id+'">Abrir</button></div>'}).join(''):'<div class="empty" style="padding-left:0">Sem projetos.</div>')+'</div>'+
+    '<div class="hr"></div><h3>Projetos</h3><div class="list">'+(obs.length?obs.map(function(o){return '<div class="row" style="padding-left:0;padding-right:0"><div><div class="t">'+esc(o.titulo)+'</div><div class="d">'+(o.cancelamento?'Cancelado':ETAPAS[o.etapa])+' · '+brl(o.valor)+'</div></div><button class="btn btn-sm" data-act="openObra" data-id="'+o.id+'">Abrir</button></div>'}).join(''):'<div class="empty" style="padding-left:0">Sem projetos.</div>')+'</div>'+
     (function(){var ab=S.receber.filter(function(r){return r.clienteId===id&&r.status!=='recebido'}).sort(function(a,b){return a.venc.localeCompare(b.venc)});if(!ab.length)return '';var t=today();return '<h3>Parcelas em aberto</h3><div class="scroll"><table class="tbl"><thead><tr><th>Vencimento</th><th>Projeto</th><th>Parcela</th><th class="r">Valor</th><th></th></tr></thead><tbody>'+ab.map(function(r){var late=r.venc<t;return '<tr><td class="num"'+(late?' style="color:var(--bad);font-weight:600"':'')+'>'+fd(r.venc)+(late?' · atrasada':'')+'</td><td>'+esc((obra(r.obraId)||{}).titulo||'')+'</td><td>'+parcHTML(r)+'</td><td class="r"><b>'+brl(r.bruto)+'</b></td><td class="r"><button class="btn btn-sm" data-act="receber" data-id="'+r.id+'">Recebi</button></td></tr>'}).join('')+'</tbody></table></div>'})()+
     (qs.length?'<h3>Outros orçamentos</h3><div class="list">'+qs.map(function(q){return '<div class="row" style="padding-left:0;padding-right:0"><div><div class="t">'+esc(q.titulo)+'</div><div class="d">'+STATUS[q.status]+'</div></div><button class="btn btn-sm" data-act="openQuote" data-id="'+q.id+'">Abrir</button></div>'}).join('')+'</div>':''),
-    foot:'<button class="btn" data-act="newQuoteFor" data-id="'+id+'">Novo orçamento para este cliente</button><button class="btn btn-primary" data-act="saveCliente" data-id="'+id+'">Salvar</button>'});
+    foot:(c.excluidoEm?'<button class="btn" data-act="restoreClient" data-id="'+id+'">Restaurar cliente</button>':'<button class="btn btn-ghost" data-act="deleteClient" data-id="'+id+'">Excluir cliente</button><button class="btn" data-act="newQuoteFor" data-id="'+id+'">Novo orçamento para este cliente</button>')+'<button class="btn btn-primary" data-act="saveCliente" data-id="'+id+'">Salvar alterações</button>'});
 }
 
 /* ---------- Obras ---------- */
@@ -2113,11 +2162,12 @@ function vObras(){
   var views=[['quadro','Quadro'],['lista','Lista'],['tempo','Linha do tempo']];
   var head='<div class="page-head"><div><h1>Projetos</h1><p>Da aprovação à entrega. Ao entregar, você confere o que foi gasto de verdade.</p></div><div class="seg">'+views.map(function(x){return '<button data-act="pView" data-v="'+x[0]+'" class="'+(v===x[0]?'on':'')+'">'+x[1]+'</button>'}).join('')+'</div></div>';
   var body=v==='lista'?pLista(t):v==='tempo'?pTempo(t):pQuadro(t);
-  return head+body;
+  var cancelled=S.obras.filter(function(o){return o.cancelamento});
+  return head+body+(cancelled.length?'<details class="card"><summary class="sec">Projetos cancelados ('+cancelled.length+')</summary><div class="list">'+cancelled.map(function(o){return itemRow(o.titulo,esc(o.cancelamento.motivo),pill('warn','Cancelado'),'<button class="btn btn-sm" data-act="openObra" data-id="'+o.id+'">Ver histórico</button>')}).join('')+'</div></details>':'');
 }
 function pQuadro(t){
   return '<div class="kanban">'+ETAPAS.map(function(e,i){
-    var all=S.obras.filter(function(o){return o.etapa===i});
+    var all=S.obras.filter(function(o){return !o.cancelamento&&o.etapa===i});
     var obs=all.slice().sort(function(a,b){return (a.entrega||'').localeCompare(b.entrega||'')});
     if(i===4)obs=all.slice().sort(function(a,b){return (b.entregueEm||'').localeCompare(a.entregueEm||'')}).slice(0,6);
     return '<section class="col" aria-label="'+e+'"><div class="col-h"><span>'+e+'</span><span class="cnt">'+all.length+'</span></div>'+
@@ -2126,8 +2176,8 @@ function pQuadro(t){
 }
 function stageDots(i){return '<span class="stg">'+ETAPAS.map(function(e,k){return '<i class="'+(k<i||i===4?'done':k===i?'cur':'')+'" title="'+e+'"></i>'}).join('')+'</span>'}
 function pLista(t){
-  var ativos=S.obras.filter(function(o){return o.etapa<4}).sort(function(a,b){return (a.entrega||'9').localeCompare(b.entrega||'9')});
-  var entregues=S.obras.filter(function(o){return o.etapa===4}).sort(function(a,b){return (b.entregueEm||'').localeCompare(a.entregueEm||'')}).slice(0,6);
+  var ativos=S.obras.filter(function(o){return !o.cancelamento&&o.etapa<4}).sort(function(a,b){return (a.entrega||'9').localeCompare(b.entrega||'9')});
+  var entregues=S.obras.filter(function(o){return !o.cancelamento&&o.etapa===4}).sort(function(a,b){return (b.entregueEm||'').localeCompare(a.entregueEm||'')}).slice(0,6);
   function row(o){var c=cliente(o.clienteId);var late=o.etapa<4&&o.entrega&&o.entrega<t;
     var recs=S.receber.filter(function(r){return r.obraId===o.id});var tot=recs.reduce(function(a,r){return a+r.bruto},0)||o.valor;var got=recs.filter(function(r){return r.status==='recebido'}).reduce(function(a,r){return a+r.bruto},0);var pr=tot?got/tot*100:0;
     return '<tr><td><b class="lk" data-act="openObra" data-id="'+o.id+'" role="button" tabindex="0">'+esc(o.titulo)+'</b><br><span class="muted small">'+esc(c?c.nome:'')+'</span></td><td>'+stageDots(o.etapa)+'<br><span class="small">'+ETAPAS[o.etapa]+'</span></td><td class="num">'+(o.etapa<4?'<span style="'+(late?'color:var(--bad);font-weight:600':'')+'">'+fd(o.entrega)+'</span>'+(late?'<br><span class="small" style="color:var(--bad)">atrasada</span>':'<br><span class="muted small">em '+daysBetween(t,o.entrega)+' dias</span>'):'<span class="muted">entregue '+fds(o.entregueEm)+'</span>')+'</td><td class="r">'+brl0(o.valor)+'</td><td style="min-width:130px"><div class="prog" style="margin:0;width:100%"><span style="width:'+Math.min(100,pr)+'%"></span></div><span class="muted small">'+pct(pr)+' recebido</span></td><td class="r">'+(o.etapa<4?'<button class="btn btn-sm" data-act="moveObra" data-id="'+o.id+'" data-dir="1">'+(o.etapa===3?'Entregar':'Avançar')+' →</button>':'<button class="btn btn-sm" data-act="openObra" data-id="'+o.id+'">Abrir</button>')+'</td></tr>'}
@@ -2136,7 +2186,7 @@ function pLista(t){
     '<div class="card"><div class="card-head"><div class="ttl"><h2>Entregues recentemente</h2><span class="cnt">'+entregues.length+'</span></div></div><div class="scroll">'+(entregues.length?'<table class="tbl">'+head+'<tbody>'+entregues.map(row).join('')+'</tbody></table>':'<div class="list"><div class="empty">Nada entregue ainda.</div></div>')+'</div></div>';
 }
 function pTempo(t){
-  var lista=S.obras.filter(function(o){return o.etapa<4||(o.entregueEm&&daysBetween(o.entregueEm,t)<=30)}).sort(function(a,b){return (a.entrega||'9').localeCompare(b.entrega||'9')});
+  var lista=S.obras.filter(function(o){return !o.cancelamento&&(o.etapa<4||(o.entregueEm&&daysBetween(o.entregueEm,t)<=30))}).sort(function(a,b){return (a.entrega||'9').localeCompare(b.entrega||'9')});
   if(!lista.length)return '<div class="card"><div class="list"><div class="empty">Nenhum projeto para mostrar.</div></div></div>';
   var ini=lista.reduce(function(m,o){return o.criadoEm<m?o.criadoEm:m},t);var fim=lista.reduce(function(m,o){var e=o.entregueEm||o.entrega||t;return e>m?e:m},t);
   ini=addDays(ini,-5);fim=addDays(fim,7);var span=Math.max(1,daysBetween(ini,fim));
@@ -2151,6 +2201,7 @@ function pTempo(t){
 
 function openObra(id){
   var o=obra(id);if(!o)return;var c=cliente(o.clienteId);var r=o.realizado||{};
+  if(o.cancelamento){openModal({title:o.titulo,body:cancellationDetails(o),foot:'<button class="btn" data-act="viewQuote" data-id="'+o.quoteId+'">Ver orçamento</button><button class="btn" data-act="restoreCancelledQuote" data-id="'+o.quoteId+'">Desfazer cancelamento</button>'});return}
   var recs=S.receber.filter(function(x){return x.obraId===id});
   var lr=lucroReal(o);var rd=rendeDia(o);
   openModal({title:o.titulo,wide:true,body:
@@ -2163,10 +2214,10 @@ function openObra(id){
     '<div class="fgrid">'+field('Material gasto (R$) · previsto '+brl0(o.materialPrev),'ob-mat',r.material,{type:'number',step:'any'})+field('Horas reais · previsto '+dec(o.horasPrev,0)+' h','ob-hor',r.horas,{type:'number',step:'any'})+field('Gastos extras (R$)','ob-ext',r.extras,{type:'number',step:'any'})+'</div>'+
     '<div class="hr"></div><div class="cx-project-head"><h3>Caixinhas do projeto</h3><button class="btn btn-sm" data-act="cxGo" data-id="'+o.id+'">Abrir em Caixinhas</button></div>'+cxTable(cxProject(o))+
     '<div class="hr"></div><h3>Recebimentos</h3><div class="scroll"><table class="tbl"><thead><tr><th>Parcela</th><th>Vencimento</th><th class="r">Valor</th><th>Situação</th></tr></thead><tbody>'+recs.map(function(x){var st=recStatus(x);return '<tr><td>'+esc(String(x.desc||'Recebimento').split(' — ')[0])+'</td><td>'+fd(x.venc)+'</td><td class="r">'+brl(x.bruto)+'</td><td>'+pill(st==='recebido'?'ok':st==='atrasado'?'bad':'enviado',st==='recebido'?'Recebido':st==='atrasado'?'Atrasado':'Pendente')+'</td></tr>'}).join('')+'</tbody></table></div>',
-    foot:'<button class="btn btn-primary" data-act="saveObra" data-id="'+id+'">Salvar</button>'});
+    foot:'<button class="btn btn-ghost" data-act="cancelQuote" data-id="'+o.quoteId+'">Cancelar projeto</button><button class="btn btn-primary" data-act="saveObra" data-id="'+id+'">Salvar</button>'});
 }
 
-function openEntrega(id){var o=obra(id);if(!o)return;var r=o.realizado||{};
+function openEntrega(id){var o=obra(id);if(!o||o.cancelamento)return;var r=o.realizado||{};
   openModal({title:(o.etapa===4?'Gastos de ':'Entregar ')+o.titulo,body:'<p class="muted" style="margin-top:0">Confira o que foi gasto de verdade. Já vem com o previsto; mude só o que foi diferente.</p>'+
     '<div class="fgrid">'+field('Material gasto (R$)','en-mat',r.material!==''&&r.material!=null?r.material:Math.round(n(o.materialPrev)),{type:'number',step:'any'})+field('Horas reais','en-hor',r.horas!==''&&r.horas!=null?r.horas:Math.round(n(o.horasPrev)),{type:'number',step:'any'})+field('Gastos extras (R$)','en-ext',r.extras!==''&&r.extras!=null?r.extras:0,{type:'number',step:'any'})+'</div>'+
     '<p class="small muted">Previsto: material '+brl0(o.materialPrev)+' · '+dec(o.horasPrev,0)+' h de trabalho.</p>',
@@ -2269,7 +2320,7 @@ function dPagar(){
 }
 
 function dLucro(){
-  var list=S.obras.slice().sort(function(a,b){return (b.criadoEm||'').localeCompare(a.criadoEm||'')});
+  var list=S.obras.filter(function(o){return !o.cancelamento}).sort(function(a,b){return (b.criadoEm||'').localeCompare(a.criadoEm||'')});
   var fech=list.filter(function(o){return lucroReal(o)!=null});var acima=fech.filter(function(o){return lucroReal(o)>=o.sobra}).length;
   var intro='<div class="alert info" style="margin-bottom:16px"><b>Previsto</b> é o lucro que o orçamento calculou. <b>Real</b> é o que sobrou de fato, com o material, as horas e os extras informados na entrega. A última coluna mostra se o orçamento acertou: verde, sobrou mais do que o previsto; vermelho, sobrou menos.'+(fech.length?' Até agora, '+acima+' de '+fech.length+' projetos entregues ficaram no previsto ou acima.':'')+' <b>Por dia</b> é o que o projeto deixou para pagar equipe, oficina e lucro, dividido pelos dias de trabalho ('+dec(n(S.config.horasDia)||8,0)+' h cada). Terminar mais rápido, pelo mesmo preço, faz esse número subir.</div>';
   return intro+'<div class="card scroll"><table class="tbl"><thead><tr><th>Projeto</th><th class="r">Contrato</th><th class="r">Lucro previsto</th><th class="r">Lucro real</th><th class="r">Real vs previsto</th><th class="r">Por dia</th><th></th></tr></thead><tbody>'+
@@ -2285,8 +2336,8 @@ function dGeral(){
   var C=S.config,t=today();
   var ano=ui.dRef.slice(0,4);
   var perLabel=ui.dPer==='mes'?MESES_LONG[+ui.dRef.slice(5,7)-1]+' de '+ano:ano;var perTitle=perLabel.charAt(0).toUpperCase()+perLabel.slice(1);
-  var vendidas=S.obras.filter(function(o){return inPer(o.criadoEm)});
-  var rdL=0,rdD=0,rdN=0,rdC=0;S.obras.forEach(function(o){if(!o.entregueEm||!inPer(o.entregueEm))return;var rd=rendeDia(o);if(rd.real==null)return;rdL+=rd.real*rd.diasReal;rdD+=rd.diasReal;rdC+=rd.custoDia*rd.diasReal;rdN++});var rdM=rdD?rdL/rdD:null;
+  var vendidas=S.obras.filter(function(o){return !o.cancelamento&&inPer(o.criadoEm)});
+  var rdL=0,rdD=0,rdN=0,rdC=0;S.obras.forEach(function(o){if(o.cancelamento||!o.entregueEm||!inPer(o.entregueEm))return;var rd=rendeDia(o);if(rd.real==null)return;rdL+=rd.real*rd.diasReal;rdD+=rd.diasReal;rdC+=rd.custoDia*rd.diasReal;rdN++});var rdM=rdD?rdL/rdD:null;
   var vendido=vendidas.reduce(function(a,o){return a+o.valor},0);
   var lucroPrev=vendidas.reduce(function(a,o){return a+o.sobra},0);
   var custoPrev=vendidas.reduce(function(a,o){return a+n(o.custo)},0);
@@ -2495,7 +2546,7 @@ function dCaixinhas(){
     var o=item.o,x=item.x,c=cliente(o.clienteId),open=!!ids[o.id],next=x.next;
     var late=next&&recStatus(next)==='atrasado';
     var nextLine=next?'<span class="small cx-next-date'+(late?' bad':'')+'">'+(late?'Parcela vencida':'Próxima parcela')+' · '+fd(next.venc)+' · '+brl(cxCents(next.liquido)/100)+'</span>':'';
-    var status=(item.pending?pill('warn',item.pending+(item.pending===1?' recebimento a separar':' recebimentos a separar')):'')+
+    var status=(o.cancelamento?pill('warn','Projeto cancelado'):'')+(item.pending?pill('warn',item.pending+(item.pending===1?' recebimento a separar':' recebimentos a separar')):'')+
       (group==='separados'?pill('ok','Separado'):'')+(x.shortfall?pill('bad','Contrato abaixo do custo'):'');
     var button='<button class="cx-row'+(open?' open':'')+'" data-act="cxToggle" data-id="'+o.id+'" aria-expanded="'+open+'" aria-controls="cx-'+o.id+'"><span class="cx-ch" aria-hidden="true">›</span>'+
       '<span class="cx-tt"><b class="cx-project-title">'+esc(o.titulo)+'</b><span class="muted small">'+esc(c?c.nome+' · ':'')+'Recebido '+brl(x.received/100)+' de '+brl(x.net/100)+' líquidos</span>'+nextLine+'</span>'+
@@ -2701,7 +2752,7 @@ function hdTiles(C){
 }
 function hdCap(C){
   var x=hdNums(C);var pdMes=x.of.horas/x.hd;var p=Math.max(1,n(C.pessoasProjeto)||1);
-  var L=0,D=0;S.obras.forEach(function(o){var rd=rendeDia(o);if(rd.real==null)return;L+=rd.real*rd.diasReal;D+=rd.diasReal});var med=D?L/D:null;
+  var L=0,D=0;S.obras.forEach(function(o){if(o.cancelamento)return;var rd=rendeDia(o);if(rd.real==null)return;L+=rd.real*rd.diasReal;D+=rd.diasReal});var med=D?L/D:null;
   return '<h2>Capacidade e resultado</h2><div class="brk" style="padding:0">'+
    '<div><span>Dias de trabalho por mês (toda a equipe)</span><b>'+dec(pdMes,0)+' dias</b></div>'+
    '<div><span>Horas produtivas por mês (soma das pessoas)</span><span>'+dec(x.of.horas,0)+' h</span></div>'+
@@ -2756,6 +2807,22 @@ var A={
     closeModal();ui.aTab='materiais';location.hash='#ajustes';render();cfgLive();
   },
   importQuickCreate:importQuickCreate,
+  cancelQuote:function(b){confirmCancellation(b.dataset.id)},
+  confirmCancelQuote:function(b){
+    if(readOnly)return;
+    var result=cancelApprovedQuote(b.dataset.id,val('cancel-reason'),$('#cancel-pending').checked);
+    if(result.error){toast(result.error);return}
+    ui.quoteId=null;ui.draft=null;closeModal();save('Orçamento cancelado. Confira os acertos no financeiro.');viewQuote(b.dataset.id);
+  },
+  restoreCancelledQuote:function(b){
+    var q=quote(b.dataset.id);if(!q||q.status!=='cancelado')return;
+    openModal({title:'Desfazer cancelamento?',body:'<p>O projeto voltará à etapa anterior e as parcelas retiradas voltarão à cobrança com os vencimentos originais. Elas podem estar atrasadas. Recebimentos e contas a pagar não serão alterados.</p>',foot:'<button class="btn" data-act="viewQuote" data-id="'+q.id+'">Voltar</button><button class="btn btn-primary" data-act="confirmRestoreCancelled" data-id="'+q.id+'">Restaurar aprovação</button>'});
+  },
+  confirmRestoreCancelled:function(b){if(readOnly)return;var result=restoreApprovedQuote(b.dataset.id);if(result.error){toast(result.error);return}closeModal();save('Aprovação restaurada.');viewQuote(b.dataset.id)},
+  clientTrash:clientTrash,
+  deleteClient:function(b){var c=cliente(b.dataset.id);if(!c)return;openModal({title:'Excluir cliente?',body:'<p>'+esc(c.nome)+' sairá da lista de cadastros e da seleção de novos orçamentos. Projetos, propostas e cobranças permanecem vinculados ao histórico. Você poderá restaurar o cadastro em Clientes excluídos.</p>',foot:'<button class="btn" data-act="openCliente" data-id="'+c.id+'">Voltar</button><button class="btn btn-danger" data-act="confirmDeleteClient" data-id="'+c.id+'">Excluir cliente</button>'})},
+  confirmDeleteClient:function(b){if(readOnly)return;var r=clientArchiveRecord(b.dataset.id,false);if(r.error){toast(r.error);return}closeModal();save('Cliente excluído da lista. Histórico preservado.')},
+  restoreClient:function(b){if(readOnly)return;var r=clientArchiveRecord(b.dataset.id,true);if(r.error){toast(r.error);return}closeModal();save('Cliente restaurado.')},
   mobcloudApply:applyMobcloud,
   newQuote:function(){ui.importDraft=null;ui.step=0;ui.quoteId='new';ui.draft=newDraft();location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
   newQuoteFor:function(b){ui.importDraft=null;closeModal();ui.step=0;ui.quoteId='new';ui.draft=newDraft(b.dataset.id);location.hash='#orcamentos';render();live();window.scrollTo(0,0)},
@@ -2893,16 +2960,16 @@ var A={
     if(!id)ui.cSearch='';closeModal();save('Cliente salvo.');
   },
   openObra:function(b){openObra(b.dataset.id)},
-  moveObra:function(b){var o=obra(b.dataset.id);var k=o.etapa+(+b.dataset.dir);if(k<0||k>4)return;if(k===4){openEntrega(o.id);return}o.etapa=k;
+  moveObra:function(b){var o=obra(b.dataset.id);if(!o||o.cancelamento)return;var k=o.etapa+(+b.dataset.dir);if(k<0||k>4)return;if(k===4){openEntrega(o.id);return}o.etapa=k;
     if(k===4){openEntrega(o.id);return}
     else{if(k<4){o.entregueEm=null}save()}},
-  saveObra:function(b){var o=obra(b.dataset.id);var et=+val('ob-etapa');
+  saveObra:function(b){var o=obra(b.dataset.id);if(!o||o.cancelamento)return;var et=+val('ob-etapa');
     if(et===4&&o.etapa!==4){o.entregueEm=today()}
     if(et<4)o.entregueEm=null;
     o.etapa=et;o.entrega=val('ob-entrega');
     o.realizado={material:val('ob-mat'),horas:val('ob-hor'),extras:val('ob-ext'),fechado:et===4&&val('ob-mat')!==''&&val('ob-hor')!==''};
     closeModal();save('Projeto salvo.')},
-  confirmEntrega:function(b){var o=obra(b.dataset.id);if(o.etapa!==4||!o.entregueEm)o.entregueEm=today();o.etapa=4;o.realizado={material:val('en-mat'),horas:val('en-hor'),extras:val('en-ext')||0,fechado:true};
+  confirmEntrega:function(b){var o=obra(b.dataset.id);if(!o||o.cancelamento)return;if(o.etapa!==4||!o.entregueEm)o.entregueEm=today();o.etapa=4;o.realizado={material:val('en-mat'),horas:val('en-hor'),extras:val('en-ext')||0,fechado:true};
     var lr=lucroReal(o);var df=lr-o.sobra;var rd=rendeDia(o);closeModal();save('Projeto entregue. Lucro real '+brl0(lr)+(Math.abs(df)<1?', igual ao previsto.':df>0?', '+brl0(df)+' acima do previsto.':', '+brl0(-df)+' abaixo do previsto.')+(rd.real!=null?' Rendeu '+brl0(rd.real)+' por dia.':''))},
   informarGastos:function(b){openEntrega(b.dataset.id)},
   cxSep:function(b){
