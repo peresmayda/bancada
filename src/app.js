@@ -264,6 +264,7 @@ function mergeDupes(){var seen={},rm={};S.clientes.forEach(function(c){var k=Str
   S.orcamentos.forEach(fix);S.obras.forEach(fix);S.receber.forEach(fix);S.clientes=S.clientes.filter(function(c){return !rm[c.id]})}
 function cxMigrate(){var lim=addDays(today(),-7);S.obras.forEach(function(o){if(!o.cxOk)o.cxOk=S.receber.filter(function(r){return r.obraId===o.id&&r.status==='recebido'&&(r.recebidoEm||'')<lim}).map(function(r){return r.id})})}
 function migrate(){
+  if(S.config&&(!S.config.proposta||typeof S.config.proposta!=='object'))S.config.proposta={};
   if(S.config&&S.v>=3&&S.config.horasDia==null)S.config.horasDia=8;
   if(S.config&&S.v>=3&&S.config.pessoasProjeto==null)S.config.pessoasProjeto=2;
   if(S.config&&S.v>=3&&(S.config.catV||1)<2){var Cc=S.config;defMateriais().forEach(function(m){if(!Cc.materiais.some(function(x){return x.id===m.id})){var i=-1;Cc.materiais.forEach(function(x,j){if(x.cat===m.cat)i=j});if(i>=0)Cc.materiais.splice(i+1,0,m);else Cc.materiais.push(m)}});defFitas().forEach(function(f){if(!Cc.fitas.some(function(x){return x.id===f.id}))Cc.fitas.push(f)});Cc.catV=2}
@@ -1861,13 +1862,40 @@ function vEditor(){
   return head+stepper+'<div class="editor"><div class="card" id="ed-form">'+sec+nav.replace('step-nav','step-nav sec')+'</div><aside class="summary" id="summary"></aside></div>';
 }
 function sideHTML(d){
-  var c=calcQuote(d),C=S.config;
+  var c=calcQuote(d),C=S.config,st=Math.min(Math.max(ui.step||0,0),5);
   if(c.erro)return '<div class="card"><div class="brk"><p class="alert warn">'+esc(c.erro)+'</p></div></div>';
+  function row(k,v){return '<div><span>'+k+'</span><span>'+v+'</span></div>'}
+  // Materiais: só o que foi lançado de material.
+  if(st<=1){
+    return '<div class="card"><div class="bigs"><div class="hl"><span class="k">Material</span><span class="big">'+brl0(c.material)+'</span></div></div>'+
+    '<div class="brk">'+row('Chapas',brl0(c.chapasCusto))+row('Fita de borda',brl0(c.fitaCusto))+row('Ferragens e insumos',brl0(c.itensCusto))+(c.outros?row('Outros materiais',brl0(c.outros)):'')+row('Reserva para perdas',brl0(c.reserva))+
+    '<p class="muted small" style="margin-top:8px">Mão de obra, preço e lucro aparecem nas próximas etapas.</p></div></div>';
+  }
+  // Mão de obra: entra o custo total, ainda sem preço.
+  if(st===2){
+    return '<div class="card"><div class="bigs"><div class="hl"><span class="k">Custo até aqui</span><span class="big">'+brl0(c.custo)+'</span></div></div>'+
+    '<div class="brk">'+row('Material',brl0(c.material))+row('Mão de obra',brl0(c.maoObra))+row('Terceiros e frete',brl0(c.terceiros+c.frete))+
+    '<p class="muted small" style="margin-top:8px">Preço e lucro aparecem na etapa Valor.</p></div></div>';
+  }
   if(!c.valido)return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div></div><div class="brk"><div class="alert warn">'+(c.custo>0?'Imposto, comissão e margem passaram do limite. Reduza a margem.':'Preencha materiais e horas para ver o preço.')+'</div></div></div>';
   return '<div class="card"><div class="bigs"><div><span class="k">Custo</span><span class="big">'+brl0(c.custo)+'</span></div><div class="hl"><span class="k">Preço</span><span class="big">'+brl0(c.preco)+'</span></div><div><span class="k">Lucro da empresa</span><span class="big" style="color:var(--ok)">'+brl0(c.sobra)+'</span></div></div>'+
   '<div class="brk"><div><span>Material</span><span>'+brl0(c.material)+'</span></div><div><span>Mão de obra</span><span>'+brl0(c.maoObra)+'</span></div><div><span>Terceiros e frete</span><span>'+brl0(c.terceiros+c.frete)+'</span></div><div><span>Margem</span><span>'+pct(c.margem)+'</span></div>'+
   '<div style="color:var(--brown)"><span>Material × N</span><span>× '+dec(c.nEq,1)+' <span class="muted">(ref. × '+dec(c.N)+')</span></span></div>'+
   (c.margem<n(C.margemMinima)?'<div class="alert bad">Margem abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+'</div></div>';
+}
+function propCustomForm(d){
+  if(!d.propDados||typeof d.propDados!=='object')d.propDados={};
+  var C=S.config,m=propModel(C),o=d.propDados,cor=corValida(d.propCor);
+  var changed=!!cor||Object.keys(o).some(function(k){return String(o[k]||'').trim()});
+  function f(label,key,model){return '<div class="field"><label for="ed-propDados-'+key+'">'+label+'</label><input class="in" id="ed-propDados-'+key+'" data-f="propDados.'+key+'" value="'+esc(o[key]||'')+'" placeholder="'+esc(model||'Não informado')+'"></div>'}
+  return '<details class="sec prop-custom"'+(changed?' open':'')+'><summary><b>Personalizar esta proposta</b><span class="muted small">'+(changed?'Com ajustes só nesta proposta':'Usa o modelo de Ajustes → Proposta')+'</span></summary>'+
+   '<div class="prop-custom-body">'+
+   '<div class="field"><span class="lbl">Cor de destaque</span><div class="prop-swatches"><button type="button" class="prop-swatch-model'+(cor?'':' on')+'" data-act="propCorQ" data-cor="">Do modelo</button>'+
+   PROP_CORES.map(function(x){return '<button type="button" class="prop-swatch'+(cor===x[0]?' on':'')+'" style="--sw:'+x[0]+'" data-act="propCorQ" data-cor="'+x[0]+'" aria-label="'+x[1]+'" title="'+x[1]+'"></button>'}).join('')+
+   '<input type="color" class="prop-color" data-f="propCor" value="'+(cor||m.cor)+'" aria-label="Outra cor"></div></div>'+
+   '<p class="muted small">Campos em branco usam os dados do modelo, mostrados em cinza.</p><div class="fgrid">'+
+   f('Nome da oficina','nome',C.nomeOficina)+f('WhatsApp','telefone',C.telefone)+f('CNPJ','cnpj',m.cnpj)+f('E-mail','email',m.email)+f('Instagram','instagram',m.instagram)+f('Site','site',m.site)+'</div>'+
+   f('Endereço da oficina','endereco',m.endereco)+'</div></details>';
 }
 function reviewHTML(d){
   var c=d.proposta?d.proposta.calc:calcQuote(d),C=S.config;var locked=d.status==='aprovado';
@@ -1890,7 +1918,7 @@ function reviewHTML(d){
   var cmpHead='<div class="cmp-h"><h3>Comparação com material ×</h3>'+(locked?'<b>'+dec(c.N)+'</b>':'<input class="in r" type="number" step="0.1" min="0" id="rv-mult" data-rv="multN" value="'+c.N+'" aria-label="Multiplicador do material">')+'</div><p class="small" style="margin:-2px 0 6px">Padrão da oficina: × '+dec(C.multN)+'</p>';
   var form=locked?'':'<div class="card proposal-edit" id="proposal-fields"><div class="sec"><h2>Proposta para o cliente</h2>'+
     '<div class="field"><label for="ed-descricao">Descrição do serviço (opcional)</label><textarea class="in" id="ed-descricao" data-f="descricao" placeholder="Descreva o que será entregue, os ambientes, materiais e acabamentos.">'+esc(d.descricao||'')+'</textarea></div></div>'+
-    proposalItemsForm(d)+'<div id="proposal-issue"></div></div>';
+    proposalItemsForm(d)+propCustomForm(d)+'<div id="proposal-issue"></div></div>';
   return ctrl+'<div id="rv-top"></div>'+
    '<div class="grid2"><div class="card" id="rv-brk"></div><div class="stack"><div class="cmp">'+cmpHead+'<div id="rv-cmp"></div></div><div class="card" id="rv-conds"></div></div></div>'+
    form+'<div class="actions review-acts">'+acts.join('')+'</div>';
@@ -2055,6 +2083,21 @@ function sendQuote(b){
   if(ui.draft&&ui.draft.id===q.id){ui.draft=null;ui.quoteId=null}
   ui.qFilter='todos';closeModal();save('Proposta arquivada. Válida até '+fd(p.valida)+'.');viewQuote(q.id);
 }
+/* ---------- modelo da proposta: dados da oficina e cor de destaque ---------- */
+var PROP_CORES=[['#2A5E9A','Azul'],['#C08442','Madeira'],['#2B2F33','Grafite'],['#2E7D5B','Verde'],['#8C3B3B','Vinho']];
+function corValida(c){return /^#[0-9a-fA-F]{6}$/.test(String(c||''))?String(c):''}
+function propModel(C){C=C||S.config;var m=C.proposta||{};return {cnpj:m.cnpj||'',email:m.email||'',instagram:m.instagram||'',site:m.site||'',endereco:m.endereco||'',cor:corValida(m.cor)||'#2A5E9A',logo:m.logo||''}}
+// Junta o modelo de Ajustes com o que foi mudado só nesta proposta.
+function propHeader(q,C){
+  C=C||S.config;var m=propModel(C),o=(q&&q.propDados)||{};
+  function pick(k,fallback){var v=String(o[k]||'').trim();return v||fallback||''}
+  return {nome:pick('nome',C.nomeOficina||'Marcenaria'),telefone:pick('telefone',C.telefone),cnpj:pick('cnpj',m.cnpj),email:pick('email',m.email),instagram:pick('instagram',m.instagram),site:pick('site',m.site),endereco:pick('endereco',m.endereco),cor:corValida(q&&q.propCor)||m.cor,logo:!!m.logo};
+}
+function instagramTxt(v){v=String(v||'').trim();return v&&v.charAt(0)!=='@'&&v.indexOf('/')<0?'@'+v:v}
+function propHeadHTML(h,logo){
+  var contato=[h.cnpj?'CNPJ '+esc(h.cnpj):'',h.telefone?esc(h.telefone):'',h.email?esc(h.email):'',h.instagram?esc(instagramTxt(h.instagram)):'',h.site?esc(h.site):''].filter(Boolean);
+  return '<div class="prop-brand">'+(logo?'<img class="prop-logo" src="'+esc(logo)+'" alt="">':'')+'<div><b class="prop-of">'+esc(h.nome)+'</b>'+(contato.length?'<span class="prop-contact">'+contato.map(function(x){return '<span class="nw">'+x+'</span>'}).join('')+'</span>':'')+(h.endereco?'<span class="prop-contact">'+esc(h.endereco)+'</span>':'')+'</div></div>';
+}
 function proposalData(q,emissao){
   var C=S.config,c=calcQuote(q);
   if(!c.valido)return {error:c.erro||'O orçamento ainda não tem preço válido.'};
@@ -2088,7 +2131,7 @@ function proposalData(q,emissao){
   var calc=Object.assign({},c);delete calc.q;delete calc.ajustes;
   return {emissao:emissao,valida:validaAte(Object.assign({},q,{enviadoEm:emissao})),validade:n(q.validade)||15,
     titulo:q.titulo||'Móveis sob medida',cliente:nomeQ(q),telefoneCliente:q.contato&&q.contato.telefone||'',endereco:q.contato&&q.contato.endereco||'',
-    oficina:C.nomeOficina||'Marcenaria',telefoneOficina:C.telefone||'',descricao:descricao,obs:q.obs||'',
+    oficina:propHeader(q,C).nome,telefoneOficina:propHeader(q,C).telefone,cabecalho:propHeader(q,C),descricao:descricao,obs:q.obs||'',
     rtNome:q.rtNome||'',instalacao:c.labor.instalacao>0,
     prazo:prazo||null,prazoUnidade:unit,pessoas:pessoasDe(q),calc:calc,condicoes:conds,
     itens:items,referencia:reference?reference.forma.nome:null};
@@ -2096,20 +2139,30 @@ function proposalData(q,emissao){
 function proposalHTML(q){
   var p=q.proposta||proposalData(q,q.enviadoEm||today());
   if(p.error)return '';
-  var c=p.calc;
+  var c=p.calc,m=propModel();
+  // Propostas arquivadas antes do modelo usam os dados que tinham e a cor atual.
+  var h=p.cabecalho||{nome:p.oficina,telefone:p.telefoneOficina,cnpj:'',email:'',instagram:'',site:'',endereco:'',cor:m.cor,logo:!!m.logo};
+  var cor=corValida(h.cor)||'#2A5E9A',logo=h.logo&&m.logo?m.logo:'';
   var inc=['Material, ferragens e fita de borda','Produção na oficina'];if(c.frete>0)inc.push('Frete e entrega');if(p.instalacao)inc.push('Instalação no local');
-  var ofi=esc(p.oficina);
-  return '<article class="prop-sheet">'+
-   '<header class="prop-top"><div><b class="prop-of">'+ofi+'</b>'+(p.telefoneOficina?'<span>'+esc(p.telefoneOficina)+'</span>':'')+'</div><div class="prop-meta"><span class="prop-kind">Proposta</span><span>'+fd(p.emissao)+'</span></div></header>'+
-   '<section class="prop-hero"><p class="prop-cli">Para '+esc(p.cliente)+(p.telefoneCliente?' · '+esc(p.telefoneCliente):'')+'</p>'+(p.endereco?'<p class="prop-cli">Endereço: '+esc(p.endereco)+'</p>':'')+'<h1>'+esc(p.titulo)+'</h1>'+(p.descricao?'<p class="prop-desc">'+esc(p.descricao)+'</p>':'')+'</section>'+
-   '<section class="prop-facts"><div><span>Prazo de execução</span><b>'+(p.prazo?esc(p.prazo+' dias '+(p.prazoUnidade||'úteis')):'A confirmar')+'</b><small>a partir da aprovação do projeto final</small></div><div><span>Proposta válida até</span><b>'+fd(p.valida)+'</b><small>'+p.validade+' dias a partir da emissão</small></div></section>'+
-   ((p.itens||[]).length?'<section><h2>Entregas por item</h2>'+(p.referencia?'<p class="small muted">Valores em '+esc(p.referencia)+'.</p>':'')+
-     '<table class="prop-tbl"><thead><tr><th>Item</th><th class="r">Quantidade</th>'+(p.referencia?'<th class="r">Valor total</th>':'')+'</tr></thead><tbody>'+p.itens.map(function(item){return '<tr><td>'+esc(item.nome)+(item.descricao?'<small>'+esc(item.descricao)+'</small>':'')+'</td>'+
-       '<td class="r">'+Number(item.qtd==null?1:item.qtd).toLocaleString('pt-BR',{maximumFractionDigits:20})+'</td>'+(p.referencia?'<td>'+brl(item.valor)+'</td>':'')+'</tr>'}).join('')+'</tbody></table></section>':'')+
-   '<section><h2>Investimento</h2><table class="prop-tbl">'+p.condicoes.map(function(x){var l=condLabel(x);return '<tr><td>'+esc(x.forma.nome)+(l?'<small>'+l+'</small>':'')+'</td><td>'+brl(x.preco)+'</td></tr>'}).join('')+'</table></section>'+
-   '<section><h2>Está incluso</h2><ul class="prop-list">'+inc.map(function(i){return '<li>'+i+'</li>'}).join('')+'</ul></section>'+
+  var qtd=function(v){return Number(v==null?1:v).toLocaleString('pt-BR',{maximumFractionDigits:20})};
+  var prazo=p.prazo?esc(p.prazo+' dias '+(p.prazoUnidade||'úteis')):'A confirmar';
+  var contatoRodape=[h.telefone,h.email,instagramTxt(h.instagram)].filter(Boolean).map(esc).join(' · ');
+  return '<article class="prop-sheet" style="--pc:'+cor+'">'+
+   '<header class="prop-head">'+propHeadHTML(h,logo)+
+     '<div class="prop-doc"><span class="prop-kind">Proposta comercial</span><b>'+fd(p.emissao)+'</b><span>Válida até '+fd(p.valida)+'</span></div></header>'+
+   '<section class="prop-hero"><div class="prop-client"><span class="prop-label">Para</span><b>'+esc(p.cliente)+'</b>'+
+     ([p.telefoneCliente,p.endereco].filter(Boolean).length?'<span>'+[p.telefoneCliente,p.endereco].filter(Boolean).map(esc).join(' · ')+'</span>':'')+'</div>'+
+     '<h1>'+esc(p.titulo)+'</h1>'+(p.descricao?'<p class="prop-desc">'+esc(p.descricao)+'</p>':'')+'</section>'+
+   '<section class="prop-facts"><div><span class="prop-label">Prazo de execução</span><b>'+prazo+'</b><small>a partir da aprovação do projeto final</small></div>'+
+     '<div><span class="prop-label">Validade da proposta</span><b>'+fd(p.valida)+'</b><small>'+p.validade+' dias a partir da emissão</small></div></section>'+
+   ((p.itens||[]).length?'<section><h2>Itens</h2>'+(p.referencia?'<p class="prop-note">Valores na condição '+esc(p.referencia)+'.</p>':'')+
+     '<table class="prop-tbl prop-items"><thead><tr><th>Item</th><th class="c">Quantidade</th>'+(p.referencia?'<th class="r">Valor</th>':'')+'</tr></thead><tbody>'+
+     p.itens.map(function(item){return '<tr><td><b>'+esc(item.nome)+'</b>'+(item.descricao?'<small>'+esc(item.descricao)+'</small>':'')+'</td><td class="c">'+qtd(item.qtd)+'</td>'+(p.referencia?'<td class="r money">'+brl(item.valor)+'</td>':'')+'</tr>'}).join('')+
+     '</tbody></table></section>':'')+
+   '<section><h2>Investimento</h2><div class="prop-pay">'+p.condicoes.map(function(x){var l=condLabel(x);return '<div class="prop-pay-row"><div><b>'+esc(x.forma.nome)+'</b>'+(l?'<small>'+l+'</small>':'')+'</div><span class="money">'+brl(x.preco)+'</span></div>'}).join('')+'</div></section>'+
+   '<section><h2>Está incluso</h2><ul class="prop-check">'+inc.map(function(i){return '<li>'+i+'</li>'}).join('')+'</ul></section>'+
    (p.obs?'<section><h2>Observações</h2><p class="prop-desc">'+esc(p.obs)+'</p></section>':'')+
-   '<footer class="prop-foot">'+ofi+(p.telefoneOficina?' · '+esc(p.telefoneOficina):'')+'</footer></article>';
+   '<footer class="prop-foot"><span><b>'+esc(h.nome)+'</b>'+(contatoRodape?' · '+contatoRodape:'')+'</span><span>Proposta válida até '+fd(p.valida)+'</span></footer></article>';
 }
 function showProposal(q){
   if(!q)return;
@@ -2599,12 +2652,50 @@ function readCxRates(){
 /* ---------- Ajustes ---------- */
 function vAjustes(){
   if(!ui.cfg)ui.cfg=clone(S.config);
-  var tabs=[['oficina','Custos fixos e variáveis'],['horadia','Hora e dia'],['equipe','Equipe'],['materiais','Materiais e kits'],['pagamentos','Formas de pagamento'],['margens','Margens e impostos'],['dados','Dados e backup']];
-  var body={oficina:aOficina,horadia:aHoraDia,equipe:aEquipe,materiais:aMateriais,pagamentos:aPagamentos,margens:aMargens,dados:aDados}[ui.aTab]();
+  var tabs=[['oficina','Custos fixos e variáveis'],['horadia','Hora e dia'],['equipe','Equipe'],['materiais','Materiais e kits'],['pagamentos','Formas de pagamento'],['margens','Margens e impostos'],['proposta','Proposta'],['dados','Dados e backup']];
+  var body={oficina:aOficina,horadia:aHoraDia,equipe:aEquipe,materiais:aMateriais,pagamentos:aPagamentos,margens:aMargens,proposta:aProposta,dados:aDados}[ui.aTab]();
   var dirty=JSON.stringify(ui.cfg)!==JSON.stringify(S.config);
   return '<div class="page-head"><div><h1>Ajustes</h1><p>Valores que alimentam todos os cálculos. Mude quando os preços ou a equipe mudarem.</p></div><div class="actions" id="cfg-actions">'+(ui.aTab==='dados'?'':ui.aTab==='equipe'?'<button class="btn btn-primary" data-act="newPessoa">Adicionar pessoa</button>':'<button class="btn btn-ghost" data-act="cfgReset"'+(dirty?'':' disabled')+'>Descartar</button><button class="btn btn-primary" data-act="cfgSave">Salvar alterações</button>')+'</div></div>'+
   (cloudEnabled?'<div class="cloud-acct-m" id="cloud-acct-m"></div>':'')+
   '<div class="seg" style="margin-bottom:16px">'+tabs.map(function(t){return '<button data-act="aTab" data-tab="'+t[0]+'" class="'+(ui.aTab===t[0]?'on':'')+'">'+t[1]+'</button>'}).join('')+'</div>'+body;
+}
+function propModelPreview(C){
+  var h=propHeader(null,C),m=propModel(C);
+  return '<div class="prop-sheet prop-mini" style="--pc:'+h.cor+'"><header class="prop-head">'+propHeadHTML(h,m.logo)+'<div class="prop-doc"><span class="prop-kind">Proposta comercial</span><b>'+fd(today())+'</b></div></header>'+
+   '<section><h2>Investimento</h2><div class="prop-pay"><div class="prop-pay-row"><div><b>Pix à vista</b></div><span class="money">R$ 0,00</span></div></div></section></div>';
+}
+function aProposta(){
+  var C=ui.cfg;if(!C.proposta||typeof C.proposta!=='object')C.proposta={};var m=C.proposta,cor=corValida(m.cor)||'#2A5E9A';
+  return '<div class="editor"><div class="card"><div class="sec"><div class="sec-h"><h2>Logo</h2><span class="muted">PNG ou JPG. Fica no cabeçalho da proposta.</span></div>'+
+   '<div class="prop-logo-pick">'+(m.logo?'<img src="'+esc(m.logo)+'" alt="Logo atual">':'<span class="muted small">Sem logo</span>')+
+   '<div class="actions"><label class="btn btn-sm" for="logo-file">'+(m.logo?'Trocar logo':'Enviar logo')+'</label>'+(m.logo?'<button class="btn btn-sm btn-ghost" data-act="logoRemove">Remover</button>':'')+'</div>'+
+   '<input id="logo-file" type="file" accept="image/png,image/jpeg,image/webp" hidden></div></div>'+
+   '<div class="sec"><h2>Dados da oficina na proposta</h2><div class="fgrid">'+cField('Nome da oficina','nomeOficina',C.nomeOficina||'')+cField('WhatsApp','telefone',C.telefone||'')+cField('CNPJ','proposta.cnpj',m.cnpj||'')+cField('E-mail','proposta.email',m.email||'')+cField('Instagram','proposta.instagram',m.instagram||'')+cField('Site','proposta.site',m.site||'')+'</div>'+
+   cField('Endereço da oficina','proposta.endereco',m.endereco||'')+'</div>'+
+   '<div class="sec"><h2>Cor de destaque</h2><div class="prop-swatches">'+PROP_CORES.map(function(x){return '<button type="button" class="prop-swatch'+(cor===x[0]?' on':'')+'" style="--sw:'+x[0]+'" data-act="propCorModel" data-cor="'+x[0]+'" aria-label="'+x[1]+'" title="'+x[1]+'"></button>'}).join('')+
+   '<input type="color" class="prop-color" data-c="proposta.cor" value="'+cor+'" aria-label="Outra cor"></div><p class="muted small">Usada nos títulos, nas linhas e nos valores da proposta. Cada proposta pode trocar, na etapa Revisar.</p></div></div>'+
+   '<aside class="summary"><div class="card"><div class="card-head"><h3>Prévia do cabeçalho</h3></div><div id="prop-model-preview" class="prop-model-preview">'+propModelPreview(C)+'</div></div></aside></div>';
+}
+// Reduz o logo antes de guardar, para não pesar na sincronização.
+function loadLogo(input){
+  var file=input.files&&input.files[0];input.value='';
+  if(!file)return;
+  if(!/^image\/(png|jpeg|webp)$/.test(file.type)){toast('Use uma imagem PNG, JPG ou WebP.');return}
+  var reader=new FileReader();
+  reader.onload=function(){
+    var img=new Image();
+    img.onload=function(){
+      var k=Math.min(1,480/img.width,200/img.height),w=Math.max(1,Math.round(img.width*k)),hh=Math.max(1,Math.round(img.height*k));
+      var cv=document.createElement('canvas');cv.width=w;cv.height=hh;var cx=cv.getContext('2d');cx.drawImage(img,0,0,w,hh);
+      var data=cv.toDataURL('image/png');
+      if(data.length>180000){var cv2=document.createElement('canvas');cv2.width=w;cv2.height=hh;var c2=cv2.getContext('2d');c2.fillStyle='#fff';c2.fillRect(0,0,w,hh);c2.drawImage(img,0,0,w,hh);data=cv2.toDataURL('image/jpeg',.86)}
+      if(data.length>260000){toast('A imagem ficou grande demais. Tente um arquivo mais simples.');return}
+      if(!ui.cfg.proposta)ui.cfg.proposta={};ui.cfg.proposta.logo=data;render();cfgLive();toast('Logo carregado. Salve as alterações para guardar.');
+    };
+    img.onerror=function(){toast('Não foi possível ler a imagem.')};
+    img.src=reader.result;
+  };
+  reader.readAsDataURL(file);
 }
 function aDados(){
   return '<div class="card"><div class="sec"><h2>Backup da oficina</h2><p class="muted small">O arquivo inclui os registros e os ajustes salvos, com dados de clientes e valores.</p><div class="actions" style="margin-top:12px"><button class="btn btn-primary" data-act="exportBackup">Exportar backup</button><button class="btn" data-act="pickBackup"'+(readOnly?' disabled':'')+'>Restaurar backup</button><input id="backup-file" type="file" accept=".json,application/json" hidden></div></div>'+
@@ -2683,6 +2774,7 @@ function aOficina(){
   '<aside class="summary" id="cfg-live"></aside></div>';
 }
 function cfgLive(){
+  var pmp=$('#prop-model-preview');if(pmp&&ui.cfg)pmp.innerHTML=propModelPreview(ui.cfg);
   var company=$('#company-survival');if(company&&ui.cfg)company.innerHTML=survivalHTML(ui.cfg);
   var hl=$('#hd-live');if(hl&&ui.cfg){hl.innerHTML=hdTiles(ui.cfg);var hc=$('#hd-cap');if(hc)hc.innerHTML=hdCap(ui.cfg)}
   var el=$('#cfg-live');if(!el)return;var of=oficina(ui.cfg);
@@ -3068,6 +3160,9 @@ var A={
   cfgKitItemDel:function(b){var k=ui.cfg.kits[+b.dataset.i];if(k)k.itens.splice(+b.dataset.j,1);render();cfgLive()},
   cfgDel:function(b){ui.cfg[b.dataset.list].splice(+b.dataset.i,1);render();cfgLive()},
   cfgReset:function(){ui.cfg=clone(S.config);render();cfgLive()},
+  propCorModel:function(b){if(!ui.cfg.proposta)ui.cfg.proposta={};ui.cfg.proposta.cor=b.dataset.cor;render();cfgLive()},
+  logoRemove:function(){if(ui.cfg.proposta)ui.cfg.proposta.logo='';render();cfgLive()},
+  propCorQ:function(b){var d=ui.draft;if(!d||d.status==='aprovado')return;d.propCor=b.dataset.cor||'';rerenderEditor();autoSaveDraft()},
   cfgSave:function(){
     var C=ui.cfg;['chapas','fitas','kits','formas','custosFixos','materiais'].forEach(function(l){C[l]=(C[l]||[]).filter(function(x){return String(x.nome||'').trim()})});C.kits.forEach(function(k){k.itens=(k.itens||[]).filter(function(r){return r.id&&n(r.qtd)>0&&C.materiais.some(function(m){return m.id===r.id})})});
     S.config=clone(C);save('Ajustes salvos. Orçamentos em aberto com preço alterado aparecem no Início.');cfgLive()},
@@ -3131,6 +3226,7 @@ document.addEventListener('change',function(e){
   if(cloudEnabled&&(!S||readOnly))return;
   var t=e.target;
   if(t.id==='mobcloud-file'){openMobcloudFile(t);return}
+  if(t.id==='logo-file'){loadLogo(t);return}
   var mobItem=(t.id||'').match(/^mob-itens-(\d+)$/);
   if(mobItem){mobcloudComponentChanged(t,+mobItem[1]);return}
   if(t.id==='cx-month'){

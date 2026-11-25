@@ -31,7 +31,7 @@ test('quantidade acompanha os itens e o valor informado continua sendo o total d
   assert.equal(proposal.itens[0].qtd, 3);
   assert.equal(proposal.itens[0].valor, price);
   assert.match(api.proposalHTML(q), /Quantidade/);
-  assert.match(api.proposalHTML(q), /<td class="r">3<\/td>/);
+  assert.match(api.proposalHTML(q), /<td class="c">3<\/td>/);
   for (const quantity of [0, -1, '', 'abc', Infinity]) {
     q.entregas[0].qtd = quantity;
     assert.match(api.proposalData(q, '2026-11-21').error, /quantidade/);
@@ -46,7 +46,7 @@ test('itens antigos assumem quantidade um e propostas enviadas permanecem com o 
   const snapshot = JSON.stringify(q.proposta);
   q.entregas[0].qtd = 8; q.descricao = 'Descrição nova';
   assert.doesNotMatch(api.proposalHTML(q), /Descrição nova/);
-  assert.match(api.proposalHTML(q), /<td class="r">1<\/td>/);
+  assert.match(api.proposalHTML(q), /<td class="c">1<\/td>/);
   assert.equal(JSON.stringify(q.proposta), snapshot);
 });
 
@@ -63,4 +63,51 @@ test('ajuste final oferece sliders globais e por categoria, com limites independ
   assert.ok(api.calcQuote(q).preco > before);
   assert.equal(q.lucros.maoObra, 30);
   assert.equal(q.lucros.empresa, 40);
+});
+
+test('resumo do orçamento mostra só materiais e depois acrescenta custo e preço', () => {
+  const { api, q } = draft();
+  api.ui.draft = q;
+  api.ui.step = 1;
+  const materiais = api.sideHTML(q);
+  assert.match(materiais, /Material/);
+  assert.doesNotMatch(materiais, /class="k">Preço|Lucro da empresa|<span>Mão de obra<\/span>|Custo até aqui/);
+  api.ui.step = 2;
+  const mao = api.sideHTML(q);
+  assert.match(mao, /Custo até aqui/);
+  assert.match(mao, /Mão de obra/);
+  assert.doesNotMatch(mao, /class="k">Preço|Lucro da empresa/);
+  api.ui.step = 3;
+  assert.match(api.sideHTML(q), /class="k">Preço/);
+});
+
+test('proposta usa o modelo de Ajustes e aceita ajuste só nesta proposta', () => {
+  const { api, q } = draft();
+  const C = api.getState().config;
+  C.nomeOficina = 'Marcenaria WDM';
+  C.proposta = { cnpj: '12.345.678/0001-90', instagram: 'marcenariawdm', cor: '#2E7D5B' };
+  let html = api.proposalHTML(q);
+  assert.match(html, /Marcenaria WDM/);
+  assert.match(html, /CNPJ 12\.345\.678\/0001-90/);
+  assert.match(html, /@marcenariawdm/);
+  assert.match(html, /--pc:#2E7D5B/);
+  q.propCor = '#8C3B3B';
+  q.propDados = { nome: 'WDM Móveis', cnpj: '' };
+  html = api.proposalHTML(q);
+  assert.match(html, /WDM Móveis/);
+  assert.match(html, /CNPJ 12\.345\.678\/0001-90/);
+  assert.match(html, /--pc:#8C3B3B/);
+  q.propCor = 'red;background:url(x)';
+  assert.match(api.proposalHTML(q), /--pc:#2E7D5B/);
+});
+
+test('proposta enviada guarda os dados da oficina do momento do envio', () => {
+  const { api, q } = draft();
+  const C = api.getState().config;
+  C.proposta = { cnpj: '11.111.111/0001-11', cor: '#2B2F33' };
+  q.proposta = api.proposalData(q, '2026-11-21');
+  C.proposta = { cnpj: '22.222.222/0001-22', cor: '#2A5E9A' };
+  const html = api.proposalHTML(q);
+  assert.match(html, /11\.111\.111\/0001-11/);
+  assert.match(html, /--pc:#2B2F33/);
 });
