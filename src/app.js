@@ -2027,7 +2027,11 @@ function refreshReview(){
     deliveryTotal.textContent='Soma dos itens: '+brl(subtotal)+(reference?' · Total em '+reference.nome+': '+brl(calcCond(c,reference).preco):'');
   }
   $('#rv-top').innerHTML=(!d.proposta&&c.referenciasMdf&&c.referenciasMdf.length?'<div class="alert warn" style="margin-bottom:14px">Este orçamento usa preços de referência para '+esc(c.referenciasMdf.join(', '))+'. Confira o preço e o frete com seu fornecedor antes de enviar.</div>':'')+
-    (c.margem<n(C.margemMinima)?'<div class="alert bad" style="margin-bottom:14px">A margem está abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'');
+    (c.margem<n(C.margemMinima)?'<div class="alert bad" style="margin-bottom:14px">A margem está abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+
+   // Os três números grandes: mudam junto com as réguas de lucro.
+   '<div class="tiles rv-tiles"><div class="tile"><span class="k">Custo total</span><span class="v">'+brl0(c.custo)+'</span><span class="s">material, mão de obra, terceiros e frete</span></div>'+
+   '<div class="tile blue"><span class="k">Preço</span><span class="v">'+brl0(P)+'</span><span class="s">antes de taxa de cartão ou desconto</span></div>'+
+   '<div class="tile"><span class="k">Lucro da empresa</span><span class="v" style="color:var(--ok)">'+brl0(c.sobra)+'</span><span class="s">'+pct(c.sobra/P*100)+' do preço</span></div></div>';
   // Grupos recolhidos; o que estava aberto continua aberto ao recalcular.
   var abertos={};$$('#rv-brk details[open]').forEach(function(el){abertos[el.dataset.k]=true});
   function grp(t,v,items,k){var list=items.filter(Boolean);return '<details class="sum-grp" data-k="'+k+'"'+(abertos[k]?' open':'')+'><summary><span>'+t+'</span><span>'+brl(v)+'</span></summary>'+list.map(function(i){return '<div class="grp-i"><span>'+i[0]+'</span><span>'+brl(i[1])+'</span></div>'}).join('')+'</details>'}
