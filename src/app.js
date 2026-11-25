@@ -1828,11 +1828,11 @@ function profitPreview(c){
 }
 function areaProfitForm(d){
   var c=calcQuote(d),labels={material:'Material',maoObra:'Mão de obra',empresa:'Empresa'};
-  return '<div class="sec"><h2>Lucro sobre cada custo</h2><p class="muted small">Arraste para ver o preço e o lucro mudarem na hora. De 0% a 100% sobre cada custo; 100% dobra aquele custo. Terceiros e frete entram pelo custo, sem acréscimo.</p>'+profitPreview(c)+
-    ['material','maoObra','empresa'].map(function(key){var value=(d.lucros||{})[key],label='Lucro sobre '+labels[key].toLowerCase();return '<div class="profit-adjustment"><div class="ctrl-h"><label for="ed-lucro-'+key+'-range"><b>'+labels[key]+'</b></label><div class="rng-val"><input class="in r" type="number" min="0" max="100" step="0.5" data-profit="'+key+'" id="ed-lucro-'+key+'" aria-label="'+label+' (%)" value="'+esc(value)+'"><span>%</span></div></div>'+
-      '<input class="range" type="range" min="0" max="100" step="0.5" data-profit="'+key+'" id="ed-lucro-'+key+'-range" aria-label="'+label+'" value="'+esc(value)+'"><div class="range-scale"><span>0%</span><span>50%</span><span>100%</span></div>'+
-      '<div class="profit-values small"><span>Custo: <b data-area-cost="'+key+'">'+brl(c.custosAreas[key])+'</b></span><span>Lucro: <b data-area-profit="'+key+'">'+brl(c.lucroAreas[key])+'</b></span></div></div>'}).join('')+
-    '<p class="muted small">Impostos e comissão são calculados por fora desses custos e lucros. As condições de pagamento abaixo mostram o efeito das taxas e descontos.</p></div>';
+  return ['material','maoObra','empresa'].map(function(key){var value=(d.lucros||{})[key],label='Lucro sobre '+labels[key].toLowerCase();
+    return '<div class="p-row"><label for="ed-lucro-'+key+'-range"><b>'+labels[key]+'</b><span>custo <i data-area-cost="'+key+'">'+brl0(c.custosAreas[key])+'</i></span></label>'+
+      '<input class="range" type="range" min="0" max="100" step="0.5" data-profit="'+key+'" id="ed-lucro-'+key+'-range" aria-label="'+label+'" value="'+esc(value)+'">'+
+      '<span class="p-pct"><input class="in r" type="number" min="0" max="100" step="0.5" data-profit="'+key+'" id="ed-lucro-'+key+'" aria-label="'+label+' (%)" value="'+esc(value)+'">%</span>'+
+      '<b class="p-val" data-area-profit="'+key+'">'+brl0(c.lucroAreas[key])+'</b></div>'}).join('');
 }
 function diasRound(h){var v=n(h)/horasDia();return h===''||h==null?'':String(Math.round(v*100)/100)}
 function diasIn(f,h){return '<input class="in r" type="number" step="any" min="0" inputmode="decimal" data-dias="'+f+'" id="ed-dias-'+f+'" value="'+esc(diasRound(h))+'">'}
@@ -1987,23 +1987,27 @@ function reviewHTML(d){
     if(d.proposta)acts.push('<button class="btn" data-act="showProposal">Ver proposta</button>');
     acts.push('<button class="btn btn-primary" data-act="openObra" data-id="'+d.obraId+'">Ver projeto</button>');
   }
-  var ctrl=locked?'<div class="alert ok" style="margin-bottom:18px">Aprovado. Os valores ficaram travados no contrato.</div>':
-   '<div class="card ctrl"><div class="ctrl-h"><div><h3>Margem de lucro</h3><span class="muted small">Sugerida pelo questionário: '+pct(c.margemSug)+' · <button class="linkbtn" data-act="margSug">voltar para a sugerida</button></span></div>'+
-   '<div class="rng-val"><input class="in r" type="number" step="0.5" id="rv-margem-n" data-rv="margem" value="'+Math.round(c.margem*10)/10+'" aria-label="Margem de lucro em porcentagem"><span>%</span></div></div>'+
-   '<input type="range" min="0" max="60" step="0.5" id="rv-margem" data-rv="margem" value="'+c.margem+'" aria-label="Margem de lucro" class="range"><div class="range-scale"><span>0%</span><span>15%</span><span>30%</span><span>45%</span><span>60%</span></div>'+profitPreview(c)+'</div>';
-  if(!locked)ctrl=d.precoModo==='areas'?'<div class="card">'+areaProfitForm(d)+'<div class="sec"><button class="btn btn-sm" data-act="profitGlobal">Voltar à margem da etapa Valor</button></div></div>':ctrl+'<div class="sec"><button class="btn" data-act="profitAreas">Ajustar lucro por categoria</button></div>';
+  var porArea=d.precoModo==='areas',ctrl;
+  if(locked)ctrl='<div class="sec"><div class="alert ok">Aprovado. Os valores ficaram travados no contrato.</div></div>';
+  else ctrl='<div class="card-head"><h3>Lucro</h3><div class="seg profit-mode" role="group" aria-label="Como definir o lucro"><button class="'+(!porArea?'on':'')+'" data-act="profitGlobal" aria-pressed="'+!porArea+'">Margem única</button><button class="'+(porArea?'on':'')+'" data-act="profitAreas" aria-pressed="'+porArea+'" title="Ajustar lucro por categoria">Por categoria</button></div></div><div class="sec p-sec">'+
+    (porArea?areaProfitForm(d)+'<p class="muted small">Porcentagem sobre o custo de cada parte. 100% dobra aquele custo. '+help('Imposto e comissão são somados por fora. Terceiros usam a margem própria e o frete entra pelo custo.')+'</p>':
+     '<div class="p-row"><label for="rv-margem"><b>Margem</b><span>sugerida '+pct(c.margemSug)+'</span></label><input type="range" min="0" max="60" step="0.5" id="rv-margem" data-rv="margem" value="'+c.margem+'" aria-label="Margem de lucro" class="range">'+
+     '<span class="p-pct"><input class="in r" type="number" step="0.5" id="rv-margem-n" data-rv="margem" value="'+Math.round(c.margem*10)/10+'" aria-label="Margem de lucro em porcentagem">%</span><b class="p-val" data-profit-total>'+brl0(c.sobra)+'</b></div>'+
+     '<p class="muted small">Margem sobre o preço final. <button class="linkbtn" data-act="margSug">Voltar para a sugerida</button></p>')+'</div>';
   var cmpHead='<div class="cmp-h"><h3>Comparação com material ×</h3>'+(locked?'<b>'+dec(c.N)+'</b>':'<input class="in r" type="number" step="0.1" min="0" id="rv-mult" data-rv="multN" value="'+c.N+'" aria-label="Multiplicador do material">')+'</div><p class="small" style="margin:-2px 0 6px">Padrão da oficina: × '+dec(C.multN)+'</p>';
   var form=locked?'':'<div class="card proposal-edit" id="proposal-fields"><div class="sec"><h2>Proposta para o cliente</h2>'+
     '<div class="field"><label for="ed-descricao">Descrição do serviço (opcional)</label><textarea class="in" id="ed-descricao" data-f="descricao" placeholder="Descreva o que será entregue, os ambientes, materiais e acabamentos.">'+esc(d.descricao||'')+'</textarea></div></div>'+
     proposalItemsForm(d)+propCustomForm(d)+'<div id="proposal-issue"></div></div>';
-  return ctrl+'<div id="rv-top"></div>'+
-   '<div class="grid2"><div class="card" id="rv-brk"></div><div class="stack"><div class="cmp">'+cmpHead+'<div id="rv-cmp"></div></div><div class="card" id="rv-conds"></div></div></div>'+
+  return '<div id="rv-top"></div>'+
+   '<div class="rv-grid"><div class="card rv-ctrl">'+ctrl+'</div><div class="card rv-sum" id="rv-brk"></div></div>'+
+   '<div class="rv-grid"><div class="card" id="rv-conds"></div><div class="cmp">'+cmpHead+'<div id="rv-cmp"></div></div></div>'+
    form+'<div class="actions review-acts">'+acts.join('')+'</div>';
 }
 function refreshReview(){
   var d=ui.draft;if(!d||!$('#rv-top'))return;var c=d.proposta?d.proposta.calc:calcQuote(d),C=S.config;var locked=d.status==='aprovado';
-  $$('[data-profit-price]').forEach(function(el){el.textContent=c.valido?brl(c.preco):'Ajuste inválido'});
-  $$('[data-profit-total]').forEach(function(el){el.textContent=c.valido?brl(c.sobra):'—'});
+  $$('[data-profit-total]').forEach(function(el){el.textContent=c.valido?brl0(c.sobra):'—'});
+  $$('[data-area-profit]').forEach(function(el){var k=el.dataset.areaProfit;el.textContent=c.lucroAreas&&c.lucroAreas[k]!=null?brl0(c.lucroAreas[k]):'—'});
+  $$('[data-area-cost]').forEach(function(el){var k=el.dataset.areaCost;el.textContent=c.custosAreas&&c.custosAreas[k]!=null?brl0(c.custosAreas[k]):'—'});
   var editor=$('#proposal-fields');
   if(editor)editor.hidden=!c.valido;
   if(!c.valido){$('#rv-top').innerHTML='<div class="alert bad" style="margin-bottom:18px">'+esc(c.erro||(c.labor||{}).erro||'Com essa margem, imposto e comissão, o preço não fecha. Diminua a margem.')+'</div>';['#rv-brk','#rv-cmp','#rv-conds'].forEach(function(s){$(s).innerHTML=''});return}
@@ -2022,21 +2026,24 @@ function refreshReview(){
     var subtotal=(d.entregas||[]).reduce(function(sum,item){return sum+Math.round(n(item.valor)*100)},0)/100;
     deliveryTotal.textContent='Soma dos itens: '+brl(subtotal)+(reference?' · Total em '+reference.nome+': '+brl(calcCond(c,reference).preco):'');
   }
-  $('#rv-top').innerHTML=(!d.proposta&&c.referenciasMdf&&c.referenciasMdf.length?'<div class="alert warn" style="margin-bottom:18px">Este orçamento usa preços de referência para '+esc(c.referenciasMdf.join(', '))+'. Confira o preço e o frete com seu fornecedor antes de enviar.</div>':'')+
-    (c.margem<n(C.margemMinima)?'<div class="alert bad" style="margin-bottom:18px">A margem está abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'')+
-   '<div class="tiles"><div class="tile"><span class="k">Custo total</span><span class="v">'+brl0(c.custo)+'</span></div><div class="tile blue"><span class="k">Preço</span><span class="v">'+brl0(P)+'</span><span class="s">sem taxas de pagamento</span></div><div class="tile"><span class="k">Lucro da empresa</span><span class="v" style="color:var(--ok)">'+brl0(c.sobra)+'</span><span class="s">margem de '+pct(c.margem)+'</span></div></div>';
-  function grp(t,v,items){return '<div class="grp"><div class="grp-h"><span>'+t+'</span><span>'+brl(v)+'</span></div>'+items.filter(Boolean).map(function(i){return '<div class="grp-i"><span>'+i[0]+'</span><span>'+brl(i[1])+'</span></div>'}).join('')+'</div>'}
+  $('#rv-top').innerHTML=(!d.proposta&&c.referenciasMdf&&c.referenciasMdf.length?'<div class="alert warn" style="margin-bottom:14px">Este orçamento usa preços de referência para '+esc(c.referenciasMdf.join(', '))+'. Confira o preço e o frete com seu fornecedor antes de enviar.</div>':'')+
+    (c.margem<n(C.margemMinima)?'<div class="alert bad" style="margin-bottom:14px">A margem está abaixo da mínima de '+pct(C.margemMinima)+'.</div>':'');
+  // Grupos recolhidos; o que estava aberto continua aberto ao recalcular.
+  var abertos={};$$('#rv-brk details[open]').forEach(function(el){abertos[el.dataset.k]=true});
+  function grp(t,v,items,k){var list=items.filter(Boolean);return '<details class="sum-grp" data-k="'+k+'"'+(abertos[k]?' open':'')+'><summary><span>'+t+'</span><span>'+brl(v)+'</span></summary>'+list.map(function(i){return '<div class="grp-i"><span>'+i[0]+'</span><span>'+brl(i[1])+'</span></div>'}).join('')+'</details>'}
   var labor=c.labor,detail=labor&&labor.detalhe;
   var laborRows=detail?detail.map(function(row){return [esc(row.etapa+' · '+row.nome+' · '+dec(row.horas,1)+' h'),row.valor]}).concat([['Rateio dos custos fixos',labor.rateio]]):
     [['Oficina ('+dec(n(d.horasOficina),1)+' h)',n(d.horasOficina)*c.custoHora],['Instalação ('+dec(n(d.horasInstalacao),1)+' h)',n(d.horasInstalacao)*c.custoHora],['Custo da hora',c.custoHora]];
-  $('#rv-brk').innerHTML='<div class="card-head"><h3>Custo detalhado</h3></div><div class="brk2">'+
-   grp('Material',c.material,[['Chapas ('+dec(c.chapasQtd,0)+')',c.chapasCusto],['Fita de borda ('+dec(c.fitaRolos,0)+' rolo'+(c.fitaRolos===1?'':'s')+')',c.fitaCusto],['Ferragens e insumos',c.itensCusto],c.outros?['Outros materiais',c.outros]:null,['Reserva para perdas ('+pct(d.reservaPct)+')',c.reserva]])+
-   grp('Mão de obra e oficina',c.maoObra,laborRows)+
-   grp('Terceiros e frete',c.terceiros+c.frete,[['Terceiros',c.terceiros],['Frete e deslocamento',c.frete]])+
-   '<div class="grp-t"><span>Custo total</span><span>'+brl(c.custo)+'</span></div>'+
-   '<div class="grp-i"><span>Imposto ('+pct(c.imp*100)+')</span><span>'+brl(c.impostoV)+'</span></div>'+(c.rt?'<div class="grp-i"><span>RT '+esc(d.rtNome||'')+' ('+pct(c.rt*100)+')</span><span>'+brl(c.rtV)+'</span></div>':'')+
-   '<div class="grp-i"><span>Lucro da empresa ('+pct(c.margem)+')</span><span>'+brl(c.sobra)+'</span></div>'+
-   '<div class="grp-t big"><span>Preço</span><span>'+brl(P)+'</span></div></div>';
+  var tercRows=Array.isArray(d.terceirosItens)&&d.terceirosItens.length?d.terceirosItens.filter(function(r){return n(r.qtd)*n(r.preco)>0}).map(function(r){return [esc(r.nome||'Terceiro')+' ('+dec(n(r.qtd),2)+' '+esc(r.un||'un.')+')',n(r.qtd)*n(r.preco)]}):[['Terceiros',c.terceiros]];
+  $('#rv-brk').innerHTML='<div class="card-head"><h3>Resumo do preço</h3><span class="muted small">toque para ver os detalhes</span></div><div class="sum-body">'+
+   grp('Material',c.material,[['Chapas ('+dec(c.chapasQtd,0)+')',c.chapasCusto],['Fita de borda ('+dec(c.fitaRolos,0)+' rolo'+(c.fitaRolos===1?'':'s')+')',c.fitaCusto],['Ferragens e insumos',c.itensCusto],c.outros?['Outros materiais',c.outros]:null,['Reserva para perdas ('+pct(d.reservaPct)+')',c.reserva]],'mat')+
+   grp('Mão de obra e oficina',c.maoObra,laborRows,'mao')+
+   (c.terceiros+c.frete>0?grp('Terceiros e frete',c.terceiros+c.frete,tercRows.concat([c.frete?['Frete e deslocamento',c.frete]:null]),'ter'):'')+
+   '<div class="sum-line-t"><span>Custo total</span><span>'+brl(c.custo)+'</span></div>'+
+   '<div class="sum-line-i"><span>Imposto ('+pct(c.imp*100)+')</span><span>'+brl(c.impostoV)+'</span></div>'+(c.rt?'<div class="sum-line-i"><span>Comissão '+esc(d.rtNome||'')+' ('+pct(c.rt*100)+')</span><span>'+brl(c.rtV)+'</span></div>':'')+
+   '<div class="sum-line-i sum-profit"><span>Lucro da empresa <small>'+pct(c.sobra/P*100)+' do preço</small></span><span>'+brl(c.sobra)+'</span></div>'+
+   '<div class="sum-price"><span>Preço</span><b>'+brl(P)+'</b></div>'+
+   '<p class="muted small sum-note">Antes de taxas de cartão e descontos. O valor de cada forma de pagamento está em Condições.</p></div>';
   var diffN=c.refN-P;var nMsg;
   if(Math.abs(diffN)/P<0.03)nMsg='Chega praticamente no preço calculado.';
   else if(diffN<0)nMsg=brl0(-diffN)+' abaixo do preço calculado. '+(lucroCom(c,c.refN)<0?'Nesse valor a empresa teria prejuízo.':'A margem cairia para '+pct(margemCom(c,c.refN))+'.');
@@ -3093,7 +3100,7 @@ var A={
   saveQuote:function(){commitDraft();ui.quoteId=ui.draft.id;save('Orçamento salvo.');live()},
   viewQuote:function(b){viewQuote(b.dataset.id)},
   linkCliente:function(b){var c=cliente(b.dataset.id);ui.draft.clienteId=c.id;ui.draft.contato=clientContact(c);rerenderEditor();autoSaveDraft()},
-  profitAreas:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;var c=calcQuote(d);d.lucros=profitDefaults(c);d.precoModo='areas';rerenderEditor();autoSaveDraft()},
+  profitAreas:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho'||d.precoModo==='areas')return;var c=calcQuote(d);d.lucros=profitDefaults(c);d.precoModo='areas';rerenderEditor();autoSaveDraft()},
   profitGlobal:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;delete d.precoModo;rerenderEditor();autoSaveDraft()},
   margSug:function(){ui.draft.margemManual='';rerenderEditor();autoSaveDraft()},
   useRefN:function(){var c=calcQuote(ui.draft);var L=1-c.imp-c.rt,tp=n(c.tercProprio),rest=c.refN-(tp+n(c.tercLucro))/L;var m=rest>0?(L-(c.custo-tp)/rest)*100:-1;if(m<=0){toast('Nesse valor a empresa teria prejuízo.');return}ui.draft.margemManual=Math.round(m*10)/10;rerenderEditor();autoSaveDraft();toast('Preço ajustado para material × '+dec(c.N)+'. Margem de '+pct(ui.draft.margemManual)+'.')},
