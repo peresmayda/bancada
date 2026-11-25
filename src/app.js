@@ -59,6 +59,18 @@ var cloudEnabled=window.bancadaCloudRequired===true,cloud=null,cloudProfile='';
 var ui={sideC:(function(){try{return localStorage.getItem('bancada-side')==='1'}catch(e){return false}})(),view:'inicio',quoteId:null,draft:null,qFilter:'todos',qSearch:'',cSearch:'',dTab:'geral',dPer:'mes',dRef:today().slice(0,7),aTab:'oficina',step:0,cfg:null,recFilter:'pendentes'};
 
 /* ---------- catálogo padrão de materiais ---------- */
+var TERC_CATS=['Vidros e espelhos','Pintura e laca','Pedras e tampos','Serralheria','Estofados','Elétrica','Outros serviços'];
+function defTerceiros(){
+  var L=[
+   ['Vidros e espelhos',[['t-vidro4','Vidro 4 mm incolor','m²',180],['t-vidro4c','Vidro 4 mm fumê ou bronze','m²',220],['t-espelho','Espelho 4 mm','m²',260],['t-temperado','Vidro temperado 8 mm','m²',380]]],
+   ['Pintura e laca',[['t-laca','Pintura em laca PU','m²',220],['t-verniz','Verniz','m²',120]]],
+   ['Pedras e tampos',[['t-granito','Tampo de granito','m²',650],['t-quartzo','Tampo de quartzo','m²',1400]]],
+   ['Serralheria',[['t-metal','Estrutura metálica','metro',280],['t-peca-metal','Peça metálica sob medida','un.',150]]],
+   ['Estofados',[['t-estofado','Painel ou cabeceira estofada','m²',450]]],
+   ['Elétrica',[['t-ponto','Ponto elétrico','un.',120]]]
+  ];
+  var out=[];L.forEach(function(g){g[1].forEach(function(x){out.push({id:x[0],cat:g[0],nome:x[1],un:x[2],preco:x[3]})})});return out;
+}
 var MAT_CATS=['Dobradiças','Corrediças','Puxadores e fechos','Pistões e articuladores','Porta de correr','Pés, suportes e cabideiros','Parafusos e fixação','Colas e acabamento','Embalagem e transporte','Iluminação','Acessórios'];
 function defMateriais(){
   var L=[
@@ -264,6 +276,9 @@ function mergeDupes(){var seen={},rm={};S.clientes.forEach(function(c){var k=Str
   S.orcamentos.forEach(fix);S.obras.forEach(fix);S.receber.forEach(fix);S.clientes=S.clientes.filter(function(c){return !rm[c.id]})}
 function cxMigrate(){var lim=addDays(today(),-7);S.obras.forEach(function(o){if(!o.cxOk)o.cxOk=S.receber.filter(function(r){return r.obraId===o.id&&r.status==='recebido'&&(r.recebidoEm||'')<lim}).map(function(r){return r.id})})}
 function migrate(){
+  if(S.config&&!Array.isArray(S.config.terceiros))S.config.terceiros=defTerceiros();
+  if(S.config&&S.config.margemTerceiros==null)S.config.margemTerceiros=10;
+  if(S.config&&(!S.config.setup||typeof S.config.setup!=='object'))S.config.setup={};
   if(S.config&&(!S.config.proposta||typeof S.config.proposta!=='object'))S.config.proposta={};
   if(S.config&&S.v>=3&&S.config.horasDia==null)S.config.horasDia=8;
   if(S.config&&S.v>=3&&S.config.pessoasProjeto==null)S.config.pessoasProjeto=2;
@@ -484,8 +499,11 @@ function calcQuote(q){
   var material=materialBase+reserva;
   var labor=quoteLabor(q,C,oficina());
   var horas=labor.horas,maoObra=labor.total;
-  var terceiros=n(q.terceiros),frete=n(q.frete);
+  // Terceiros: itens na etapa Materiais. Orçamentos antigos usam o valor único.
+  var terceiros=Array.isArray(q.terceirosItens)?q.terceirosItens.reduce(function(a,r){return a+n(r.qtd)*n(r.preco)},0):n(q.terceiros),frete=n(q.frete);
   var custo=material+maoObra+terceiros+frete;
+  // Com margem própria, os terceiros recebem só essa margem; o resto, a margem do orçamento.
+  var tercProprio=q.tercModo==='proprio'?terceiros:0,tercMargem=tercProprio?Math.max(0,n(q.tercMargem)):0,tercLucro=tercProprio*tercMargem/100;
   var ajustes=Q.map(function(qq){var i=(q.respostas||{})[qq.id]||0;var w=((C.pesos[qq.id]||[])[i])||0;return {q:qq,i:i,w:w}});
   var margemSug=n(C.margemBase)+ajustes.reduce(function(a,b){return a+b.w},0);
   var manual=!isAuto(q.margemManual);
@@ -502,12 +520,13 @@ function calcQuote(q){
       lucroAlvo+=profitAreas[key];
     });
   }
+  if(porAreas)lucroAlvo+=tercLucro;
   var den=porAreas?1-imp-rt:1-imp-rt-m;var valido=den>0.05&&custo>0&&!erro;
-  var preco=valido?(custo+(porAreas?lucroAlvo:0))/den:0;
-  var sobra=porAreas?lucroAlvo:preco*m;
+  var preco=valido?(porAreas?(custo+lucroAlvo)/den:(custo-tercProprio)/den+(tercProprio+tercLucro)/(1-imp-rt)):0;
+  var sobra=porAreas?lucroAlvo:(valido?(custo-tercProprio)/den*m+tercLucro:0);
   if(porAreas){m=preco?sobra/preco:0;margem=m*100}
   return {q:q,erro:erro,porAreas:porAreas,custosAreas:costAreas,lucroAreas:profitAreas,lucroAlvo:lucroAlvo,referenciasMdf:Array.from(referenciasMdf),chapasCusto:chapasCusto,chapasQtd:chapasQtd,chapasFita:chapasFita,fitaEst:fitaEst,fitaRolos:fitaRolos,fitaMetros:fitaMetros,fitaCusto:fitaCusto,itensCusto:itensCusto,outros:outros,materialBase:materialBase,reserva:reserva,material:material,
-    custoHora:labor.hora,horas:horas,maoObra:maoObra,labor:labor,terceiros:terceiros,frete:frete,custo:custo,ajustes:ajustes,margemSug:margemSug,manual:manual,margem:margem,
+    custoHora:labor.hora,horas:horas,maoObra:maoObra,labor:labor,terceiros:terceiros,tercProprio:tercProprio,tercMargem:tercMargem,tercLucro:tercLucro,frete:frete,custo:custo,ajustes:ajustes,margemSug:margemSug,manual:manual,margem:margem,
     imp:imp,rt:rt,m:m,den:den,valido:valido,preco:preco,sobra:sobra,impostoV:preco*imp,rtV:preco*rt,
     nEq:material>0?preco/material:0,N:isAuto(q.multN)?n(C.multN):n(q.multN),refN:material*(isAuto(q.multN)?n(C.multN):n(q.multN))};
 }
@@ -515,7 +534,8 @@ function calcCond(c,f){
   var liquid=1-c.imp-c.rt-n(f.taxa)/100,d=descOf(c.q,f)/100,den=liquid-c.m;
   var floor=liquid-n(S.config.margemMinima)/100;
   var minimo=c.custo>0&&floor>0?Math.ceil(c.custo/floor*100-1e-8)/100:null;
-  var bruto=c.valido&&(c.porAreas?liquid:den)>0.05?(c.porAreas?(c.custo+c.lucroAlvo)/liquid:c.custo/den):0,preco=Math.round(bruto*(1-d)*100)/100;
+  var tp=n(c.tercProprio),tl=n(c.tercLucro);
+  var bruto=c.valido&&(c.porAreas?liquid:den)>0.05?(c.porAreas?(c.custo+c.lucroAlvo)/liquid:(c.custo-tp)/den+(tp+tl)/liquid):0,preco=Math.round(bruto*(1-d)*100)/100;
   var sobra=preco*liquid-c.custo,me=preco?sobra/preco*100:0;
   var o={forma:f,preco:preco,sobra:sobra,margemEf:me,minimo:minimo,abaixo:preco>0&&(minimo==null||preco<minimo)};
   if(f.tipo==='entrada'){var q=c.q||{};var ep=isAuto(q.entradaPct)?30:n(q.entradaPct);var np=Math.max(1,Math.round(n(q.entradaParcelas))||1);o.entrada=preco*ep/100;o.nParc=np;o.parcela=(preco-o.entrada)/np}
@@ -646,6 +666,7 @@ function materialResults(search){
   function key(value){return String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()}
   var words=key(search).trim().split(/\s+/).filter(Boolean);
   var results=S.config.materiais.filter(function(m){
+    if(ui.findCat&&(m.cat||'Outros')!==ui.findCat)return false;
     var label=key(m.nome+' '+(m.cat||''));
     return words.every(function(word){return label.includes(word)});
   });
@@ -839,6 +860,25 @@ function parcHTML(r){var p=parcInfo(r);if(!p.k)return '<span class="cpar">'+esc(
 function cobrarRow(r,t){var c=cliente(r.clienteId);var o=obra(r.obraId);var late=r.venc<t;var dd=pISO(r.venc);
   return '<div class="row crow'+(late?' late':'')+'"><div class="cdate"><b>'+dd.getDate()+'</b><span>'+MESES[dd.getMonth()]+'</span></div><div class="cmain"><div class="t">'+(c?'<span class="lk ul" data-act="openCliente" data-id="'+c.id+'" role="button" tabindex="0">'+esc(c.nome)+'</span>':'—')+'</div><div class="d">'+esc(o?o.titulo:'')+(late?' · <span class="lt">venceu há '+daysBetween(r.venc,t)+' dias</span>':'')+'</div></div><div class="cval"><b class="num">'+brl(r.bruto)+'</b>'+parcHTML(r)+'</div><button class="btn btn-sm" data-act="receber" data-id="'+r.id+'">Recebi</button></div>'}
 function itemRow(title,sub,right,btn,tone,av){var a='';if(av){var parts=String(title).trim().split(/\s+/);var ini=(parts[0]||'').charAt(0)+(parts.length>1?parts[parts.length-1].charAt(0):'');var h=0;for(var k=0;k<title.length;k++)h=(h+title.charCodeAt(k))%3;var bg=['#E9EFF6','#F5ECE1','#ECEDEA'][h],fg=['#17304B','#7A4E25','#3A3B3F'][h];a='<span class="av-sm" style="background:'+bg+';color:'+fg+'">'+esc(ini.toUpperCase())+'</span>'}return '<div class="row"><div class="rowp">'+a+'<div style="min-width:0"><div class="t">'+esc(title)+'</div><div class="d">'+sub+'</div></div></div><div class="pills" style="align-items:center">'+(right||'')+(btn||'')+'</div></div>'}
+// Lista do primeiro uso: some quando tudo está feito ou quando é escondida.
+function setupSteps(){
+  var C=S.config,st=C.setup||{};
+  var custos=(C.custosFixos||[]).reduce(function(a,f){return a+n(f.valor)},0);
+  return [
+    {key:'oficina',tab:'proposta',titulo:'Dados da oficina e logo',texto:'Nome, WhatsApp e logo que aparecem na proposta.',feito:!!st.oficina||(String(C.nomeOficina||'').trim()&&C.nomeOficina!=='Marcenaria'&&String(C.telefone||'').trim())},
+    {key:'custos',tab:'oficina',titulo:'Custos do mês',texto:'Aluguel, energia, contador e pró-labore. Sem isso, o preço sai baixo.',feito:!!st.custos||custos>0},
+    {key:'equipe',tab:'equipe',titulo:'Equipe',texto:'Quem trabalha na oficina e quanto recebe. Se for só você, marque como feito.',feito:!!st.equipe||(S.equipe||[]).some(function(e){return e.status!=='Desligado'})},
+    {key:'chapas',tab:'materiais',titulo:'Preços das chapas que você usa',texto:'Os preços de fábrica são referência. Troque pelos do seu fornecedor.',feito:!!st.chapas}
+  ];
+}
+function setupHTML(){
+  var C=S.config;if((C.setup||{}).oculto)return '';
+  var steps=setupSteps(),faltam=steps.filter(function(x){return !x.feito});
+  if(!faltam.length)return '';
+  return '<div class="card setup-card"><div class="card-head"><div><h2>Para começar</h2><span class="muted small">'+(steps.length-faltam.length)+' de '+steps.length+' feitos. Com isso, o primeiro orçamento já sai com o preço certo.</span></div><button class="btn btn-sm btn-ghost" data-act="setupHide">Esconder</button></div>'+
+   steps.map(function(x){return '<div class="setup-row'+(x.feito?' ok':'')+'"><span class="setup-mark" aria-hidden="true"></span><div><b>'+x.titulo+'</b><span class="muted small">'+x.texto+'</span></div>'+
+    (x.feito?'<span class="muted small">Feito</span>':'<div class="actions"><button class="btn btn-sm btn-primary" data-act="goSetup" data-tab="'+x.tab+'">Abrir</button><button class="btn btn-sm btn-ghost" data-act="setupDone" data-key="'+x.key+'">Já fiz</button></div>')+'</div>'}).join('')+'</div>';
+}
 function vInicio(){
   var t=today(),h=new Date().getHours();
   var saud=h<12?'Bom dia':h<18?'Boa tarde':'Boa noite';
@@ -879,7 +919,7 @@ function vInicio(){
     gt('#dinheiro','goTab','data-tab="receber"',(atr.length?'<span style="display:inline-flex;align-items:center;gap:6px"><i style="width:8px;height:8px;border-radius:50%;background:var(--bad);display:inline-block"></i>Em atraso</span>':'Em atraso'),brl0(aAtr),(atr.length?atr.length+' parcela'+(atr.length===1?'':'s')+' vencida'+(atr.length===1?'':'s'):'Ninguém devendo'))+
     gt('#orcamentos','qFilterGo','data-f="enviado"','Orçamentos aguardando',String(aguardando.length),brl0(aguardando.reduce(function(a,q){return a+quotePrice(q)},0))+' em negociação')+
     gt('#obras','','','Projetos em andamento',String(andamento.length),brl0(sum(andamento,'valor'))+' em contratos')+
-  '</div><div class="home-act"><button class="btn btn-primary btn-lg" data-act="newQuote"><span class="plus">+</span>Novo orçamento</button><button class="btn btn-lg" data-act="newConta">Conta a pagar</button></div></div>'+
+  '</div><div class="home-act"><button class="btn btn-primary btn-lg" data-act="newQuote"><span class="plus">+</span>Novo orçamento</button><button class="btn btn-lg" data-act="newConta">Conta a pagar</button></div></div>'+setupHTML()+
   '<div class="grid3">'+
    block('Cobrar',(cobrar.length?String(cobrar.length):''),cobrarHTML,'Nada para cobrar agora.')+
    block('Dar retorno',(ret.length?String(ret.length):''),ret.join(''),'Ninguém esperando retorno.')+
@@ -1738,7 +1778,7 @@ function viewQuote(id){
 function newDraft(clienteId){
   var C=S.config;var cl=clienteId&&cliente(clienteId);
   return {id:uid(),numero:null,clienteId:cl?cl.id:null,contato:clientContact(cl),titulo:'',status:'rascunho',criadoEm:today(),enviadoEm:null,
-    chapas:[{id:C.chapas[0]?C.chapas[0].id:'',qtd:1}],fitas:C.fitas[0]?[{id:C.fitas[0].id,qtd:1}]:[],itens:[],outros:0,horasOficina:0,horasInstalacao:0,pessoas:C.pessoasProjeto||2,terceiros:0,frete:0,
+    chapas:[{id:C.chapas[0]?C.chapas[0].id:'',qtd:1}],fitas:C.fitas[0]?[{id:C.fitas[0].id,qtd:1}]:[],itens:[],terceirosItens:[],tercModo:'proprio',tercMargem:C.margemTerceiros==null?10:C.margemTerceiros,prazoDias:30,outros:0,horasOficina:0,horasInstalacao:0,pessoas:C.pessoasProjeto||2,terceiros:0,frete:0,
     reservaPct:C.reserva,rtNome:'',rtPct:0,respostas:{},margemManual:'',entradaPct:30,entradaParcelas:5,condicoes:(function(){var w=['pix','entrada','cred10'].filter(function(id){return forma(id)});return w.length?w:C.formas.slice(0,3).map(function(f){return f.id})})(),validade:C.validade,obs:'',motivoPerda:'',retomarEm:'',precoSalvo:0};
 }
 function proposalItemsForm(d){
@@ -1798,6 +1838,24 @@ function diasRound(h){var v=n(h)/horasDia();return h===''||h==null?'':String(Mat
 function diasIn(f,h){return '<input class="in r" type="number" step="any" min="0" inputmode="decimal" data-dias="'+f+'" id="ed-dias-'+f+'" value="'+esc(diasRound(h))+'">'}
 function numIn(f,v,extra){return '<input class="in r" type="number" step="any" inputmode="decimal" data-f="'+f+'" id="ed-'+f.replace('.','-')+'" value="'+esc(v)+'"'+(extra||'')+'>'}
 var STEPS=['Cliente','Materiais','Mão de obra','Valor','Pagamento','Revisar'];
+// "?" com uma frase só, para termos que precisam de explicação.
+function help(text){return '<span class="help" tabindex="0" role="note" aria-label="'+esc(text)+'" data-help="'+esc(text)+'">?</span>'}
+// O que falta preencher, por etapa do orçamento.
+function draftIssues(d){
+  var out={0:{},1:{},4:{}};
+  if(!d)return out;
+  if(!d.clienteId&&!String(d.contato&&d.contato.nome||'').trim())out[0].nome='Informe o nome do cliente.';
+  if(!String(d.titulo||'').trim())out[0].titulo='Dê um nome ao projeto.';
+  if(!(d.chapas||[]).some(function(r){return n(r.qtd)>0})&&!(d.itens||[]).length&&!(d.terceirosItens||[]).length)out[1].material='Adicione pelo menos uma chapa, ferragem ou serviço.';
+  (d.terceirosItens||[]).forEach(function(r,i){if(!String(r.nome||'').trim())out[1]['terc'+i]='Diga o que é este serviço.';else if(!(n(r.preco)>0))out[1]['terc'+i]='Informe o valor.'});
+  if(!Number.isSafeInteger(n(d.prazoDias))||n(d.prazoDias)<30)out[4].prazo='O prazo precisa ser de pelo menos 30 dias.';
+  if(!(d.condicoes||[]).length)out[4].formas='Marque pelo menos uma forma de pagamento.';
+  return out;
+}
+function warnSlot(key){return '<span class="field-warn" data-warn="'+key+'" hidden></span>'}
+function tercOpts(){
+  var C=S.config;return '<datalist id="terc-list">'+(C.terceiros||[]).map(function(t){return '<option value="'+esc(t.nome)+'">'+esc((t.cat||'')+' · '+brl(t.preco)+'/'+(t.un||'un.'))+'</option>'}).join('')+'</datalist>';
+}
 function vEditor(){
   var d=ui.draft,C=S.config;normQ(d);d.descontos=d.descontos||{};var isNew=!quote(d.id);var locked=d.status==='aprovado';
   var st=locked?5:Math.min(Math.max(ui.step||0,0),5);ui.step=st;
@@ -1806,11 +1864,27 @@ function vEditor(){
   if(st===0){
     sec='<div class="sec"><div class="sec-h"><h2>Para quem é e o que vai ser feito</h2></div>'+
     '<div class="field"><label for="ed-clienteId">Já é cliente?</label><select class="in" id="ed-clienteId" data-f="clienteId">'+cOpts.map(function(o){return '<option value="'+o[0]+'"'+(String(d.clienteId||'')===o[0]?' selected':'')+'>'+esc(o[1])+'</option>'}).join('')+'</select></div>'+
-    '<div class="fgrid"><div class="field"><label for="ed-contato-nome">Nome</label><input class="in" id="ed-contato-nome" data-f="contato.nome" value="'+esc(d.contato.nome)+'"'+(d.clienteId?' readonly':'')+'></div>'+
+    '<div class="fgrid"><div class="field"><label for="ed-contato-nome">Nome</label><input class="in" id="ed-contato-nome" data-f="contato.nome" value="'+esc(d.contato.nome)+'"'+(d.clienteId?' readonly':'')+'>'+warnSlot('nome')+'</div>'+
     '<div class="field"><label for="ed-contato-telefone">WhatsApp</label><input class="in" id="ed-contato-telefone" data-f="contato.telefone" value="'+esc(d.contato.telefone)+'"'+(d.clienteId?' readonly':'')+'></div></div>'+
     '<div class="fgrid"><div class="field"><label for="ed-contato-email">E-mail</label><input class="in" type="email" id="ed-contato-email" data-f="contato.email" value="'+esc(d.contato.email||'')+'"></div><div class="field"><label for="ed-contato-endereco">Endereço de instalação</label><input class="in" id="ed-contato-endereco" data-f="contato.endereco" value="'+esc(d.contato.endereco||'')+'" placeholder="Rua, número, bairro, cidade e CEP"></div></div>'+
-    '<div id="dup-hint"></div><div class="field"><label for="ed-titulo">Nome do projeto</label><input class="in" id="ed-titulo" data-f="titulo" placeholder="Ex.: Cozinha planejada com ilha" value="'+esc(d.titulo)+'"></div><div class="actions"><button class="btn" data-act="importIntoDraft">Importar materiais do projeto</button></div><p class="muted small">Preencha o cliente e importe o arquivo neste mesmo orçamento.</p></div>';
+    '<div id="dup-hint"></div><div class="field"><label for="ed-titulo">Nome do projeto</label><input class="in" id="ed-titulo" data-f="titulo" placeholder="Ex.: Cozinha planejada com ilha" value="'+esc(d.titulo)+'">'+warnSlot('titulo')+'</div><div class="actions"><button class="btn" data-act="importIntoDraft">Importar materiais do projeto</button></div><p class="muted small">Preencha o cliente e importe o arquivo neste mesmo orçamento.</p></div>';
   }else if(st===1){
+    // Orçamentos antigos: o valor único de terceiros vira uma linha, sem mudar o preço.
+    if(!Array.isArray(d.terceirosItens)&&d.status==='rascunho'){d.terceirosItens=n(d.terceiros)>0?[{nome:'Terceiros',desc:'',qtd:1,un:'un.',preco:n(d.terceiros)}]:[];d.terceiros=0;if(!d.tercModo)d.tercModo='global'}
+    var tRows=(d.terceirosItens||[]).map(function(r,i){
+      return '<div class="terc-row"><input class="in" list="terc-list" data-row="terceirosItens" data-i="'+i+'" data-k="nome" value="'+esc(r.nome)+'" placeholder="Ex.: Vidro 4 mm incolor" aria-label="Serviço ou material">'+
+       '<input class="in" data-row="terceirosItens" data-i="'+i+'" data-k="desc" value="'+esc(r.desc||'')+'" placeholder="Detalhe (opcional)" aria-label="Detalhe">'+
+       '<input class="in r" type="number" step="any" min="0" data-row="terceirosItens" data-i="'+i+'" data-k="qtd" value="'+esc(r.qtd)+'" aria-label="Quantidade">'+
+       '<span class="terc-un" data-terc-un="'+i+'">'+esc(r.un||'un.')+'</span>'+
+       '<input class="in r" type="number" step="0.01" min="0" data-row="terceirosItens" data-i="'+i+'" data-k="preco" value="'+esc(r.preco)+'" placeholder="0,00" aria-label="Preço por unidade">'+
+       '<span class="sub" data-sub="terc" data-i="'+i+'"></span><button class="icon-btn" data-act="delRow" data-row="terceirosItens" data-i="'+i+'" aria-label="Remover serviço">×</button>'+warnSlot('terc'+i)+'</div>';
+    }).join('');
+    var tHead='<div class="terc-row head"><span>Serviço ou material</span><span>Detalhe</span><span style="text-align:right">Qtd.</span><span></span><span style="text-align:right">Preço un.</span><span style="text-align:right">Subtotal</span><span></span></div>';
+    var tSec='<div class="sec"><div class="sec-h"><h2>Serviços e materiais de terceiros</h2><span class="muted">Vidro, pintura, pedra, serralheria</span></div>'+tercOpts()+
+      '<div class="rows">'+(tRows?tHead+tRows:'<span class="muted small">Nenhum serviço de terceiro.</span>')+'</div>'+
+      '<div class="actions" style="margin-top:10px"><button class="btn btn-sm add" style="margin-top:0" data-act="addTerceiro">+ Adicionar serviço</button></div>'+
+      (d.tercModo==='proprio'?'<div style="margin-top:12px"><div class="field terc-margem"><label for="ed-tercMargem">Margem sobre terceiros (%) '+help('Lucro da oficina sobre vidro, pedra e outros serviços. O móvel continua com a margem da etapa Valor.')+'</label>'+numIn('tercMargem',d.tercMargem)+'</div></div>':'')+
+      '<div class="sum-line" id="terc-total"></div></div>';
     var chRows=(d.chapas||[]).map(function(r,i){
       var missing=r.id&&!C.chapas.some(function(m){return m.id===r.id})?'<option selected disabled>Selecione uma chapa do catálogo</option>':'';
       return '<div class="rowform"><select class="in" data-row="chapas" data-i="'+i+'" data-k="id" aria-label="Chapa">'+missing+chapaOpts(C.chapas,r.id)+'</select><input class="in r" type="number" step="any" min="0" data-row="chapas" data-i="'+i+'" data-k="qtd" value="'+esc(r.qtd)+'" aria-label="Quantidade de chapas"><span class="sub" data-sub="chapas" data-i="'+i+'"></span><button class="icon-btn" data-act="delRow" data-row="chapas" data-i="'+i+'" aria-label="Remover chapa">×</button></div>';
@@ -1825,7 +1899,7 @@ function vEditor(){
     '<div class="sec"><div class="sec-h"><h2>Ferragens e insumos</h2><span class="muted">Item por item, na quantidade de cada um</span></div><div class="rows">'+(iRows?head+iRows:'<span class="muted small">Nenhum item adicionado.</span>')+'</div>'+
     '<div class="actions" style="margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm add" style="margin-top:0" data-act="findMaterial">+ Buscar e adicionar item</button>'+((C.kits||[]).length?'<span class="kit-pick"><select class="in" id="kit-pick" aria-label="Atalho de kit"><option value="">Atalho: incluir um kit…</option>'+C.kits.map(function(k){return '<option value="'+k.id+'">'+esc(k.nome)+'</option>'}).join('')+'</select><button class="btn btn-sm" data-act="addKit">Incluir</button></span>':'')+'</div>'+
     '<div class="sum-line" id="itens-total"></div></div>'+
-    '<div class="sec"><div class="fgrid"><div class="field"><label for="ed-outros">Outros materiais (R$)</label>'+numIn('outros',d.outros)+'</div><div class="field"><label for="ed-reservaPct">Reserva para perdas (%)</label>'+numIn('reservaPct',d.reservaPct)+'</div></div></div>';
+    '<div class="sec"><div class="fgrid"><div class="field"><label for="ed-outros">Outros materiais (R$)</label>'+numIn('outros',d.outros)+'</div><div class="field"><label for="ed-reservaPct">Reserva para perdas (%) '+help('Sobra de material para cortes e erros. 5% é comum.')+'</label>'+numIn('reservaPct',d.reservaPct)+'</div></div>'+warnSlot('material')+'</div>'+tSec;
   }else if(st===2){
     var detailed=d.maoModo==='etapas';
     var quick='<div class="sugg" id="sugg"></div><div class="fgrid">'+
@@ -1839,23 +1913,25 @@ function vEditor(){
     (detailed?laborForm(d):quick)+
     '<div class="fgrid"><div class="field"><label for="ed-pessoas">Pessoas trabalhando no projeto</label>'+numIn('pessoas',isAuto(d.pessoas)?pessoasDe(d):d.pessoas,' min="1" step="1"')+'</div></div>'+
     '<p class="small muted" id="dias-info"></p></div>'+
-    '<div class="sec"><h2>Terceiros e frete</h2><div class="fgrid">'+
-    '<div class="field"><label for="ed-terceiros">Terceiros: vidro, pintura, pedra (R$)</label>'+numIn('terceiros',d.terceiros)+'</div>'+
-    '<div class="field"><label for="ed-frete">Frete e deslocamento (R$)</label>'+numIn('frete',d.frete)+'</div></div></div>'+
-    '<div class="sec"><div class="sec-h"><h2>Comissão de arquiteto</h2><span class="muted">Deixe zerado se não houver</span></div><div class="fgrid"><div class="field"><label for="ed-rtNome">Nome</label><input class="in" id="ed-rtNome" data-f="rtNome" value="'+esc(d.rtNome)+'"></div><div class="field"><label for="ed-rtPct">RT (%)</label>'+numIn('rtPct',d.rtPct)+'</div></div></div>';
+    '<div class="sec"><h2>Frete</h2><div class="fgrid">'+
+    (Array.isArray(d.terceirosItens)?'':'<div class="field"><label for="ed-terceiros">Terceiros (R$)</label>'+numIn('terceiros',d.terceiros)+'</div>')+
+    '<div class="field"><label for="ed-frete">Frete e deslocamento (R$)</label>'+numIn('frete',d.frete)+'</div></div>'+(Array.isArray(d.terceirosItens)?'<p class="muted small">Vidro, pedra, pintura e outros serviços ficam na etapa Materiais.</p>':'')+'</div>'+
+    '<details class="sec opt-sec"'+(n(d.rtPct)>0||String(d.rtNome||'').trim()?' open':'')+'><summary>Tem comissão de arquiteto ou indicação? <span class="muted small">Opcional</span></summary>'+
+    '<div class="fgrid"><div class="field"><label for="ed-rtNome">Nome de quem indicou</label><input class="in" id="ed-rtNome" data-f="rtNome" value="'+esc(d.rtNome)+'"></div><div class="field"><label for="ed-rtPct">Comissão (%) '+help('Porcentagem do valor fechado paga a quem indicou. Já entra no preço.')+'</label>'+numIn('rtPct',d.rtPct)+'</div></div></details>';
   }else if(st===3){
     var qs=Q.map(function(qq){var cur=(d.respostas||{})[qq.id]||0;return '<div class="q"><span class="qt">'+esc(qq.t)+'</span><div class="qopts" role="radiogroup" aria-label="'+esc(qq.t)+'">'+qq.o.map(function(o,i){var w=(C.pesos[qq.id]||[])[i]||0;return '<label class="qopt"><input type="radio" name="q-'+qq.id+'" data-q="'+qq.id+'" value="'+i+'"'+(cur===i?' checked':'')+'><span>'+esc(o)+(w?' <em>'+(w>0?'+':'−')+Math.abs(w)+'%</em>':'')+'</span></label>'}).join('')+'</div></div>'}).join('');
     sec='<div class="sec"><div class="sec-h"><h2>Quanto vale este projeto</h2><span class="muted">Ajusta a margem pelo que não está na lista de material</span></div>'+qs+
     '<div class="marg"><div><span class="lbl">Margem sugerida</span><div class="big" id="marg-sug"></div><span class="muted small" id="marg-base"></span></div><div class="field" style="width:170px"><label for="ed-margemManual">Usar outra margem (%)</label>'+numIn('margemManual',d.margemManual,' placeholder="automática"')+'</div></div></div>';
   }else if(st===4){
     var conds=C.formas.map(function(f){var on=d.condicoes.indexOf(f.id)>=0;return '<label class="chk"><input type="checkbox" data-cond="'+f.id+'"'+(on?' checked':'')+'> '+esc(f.nome)+(n(f.taxa)?' <span class="muted small">taxa '+pct(f.taxa)+'</span>':'')+(hasDesc(f)||descOf(d,f)?' <span class="muted small" data-dl="'+f.id+'">'+(descOf(d,f)?'desconto '+pct(descOf(d,f)):'')+'</span>':'')+'</label>'+(hasDesc(f)&&on?'<div class="entrada-box"><div class="field"><label for="ed-descontos-'+f.id+'">Desconto (%)</label>'+numIn('descontos.'+f.id,descOf(d,f))+'</div><p data-descp="'+f.id+'"></p></div>':'')+(f.tipo==='entrada'&&on?'<div class="entrada-box"><div class="field"><label for="ed-entradaPct">Entrada (%)</label>'+numIn('entradaPct',isAuto(d.entradaPct)?30:d.entradaPct)+'</div><div class="field"><label for="ed-entradaParcelas">Restante em</label>'+numIn('entradaParcelas',isAuto(d.entradaParcelas)?5:d.entradaParcelas)+'</div><p id="entrada-desc"></p></div>':'')}).join('');
-    sec='<div class="sec"><div class="sec-h"><h2>Formas de pagamento oferecidas</h2></div><div class="conds-pick">'+conds+'</div><div id="entrada-cx"></div><div id="ed-price-comparison"></div></div>'+
-    '<div class="sec"><div class="sec-h"><h2>Prazo e validade</h2></div><div class="fgrid"><div class="field"><label for="ed-prazoDias">Prazo de execução</label><input class="in r" id="ed-prazoDias" type="number" inputmode="numeric" min="30" step="1" list="prazo-opcoes" data-f="prazoDias" value="'+esc(d.prazoDias)+'" placeholder="Ex.: 30 ou 45" required><datalist id="prazo-opcoes"><option value="30"><option value="45"></datalist></div>'+
+    sec='<div class="sec"><div class="sec-h"><h2>Formas de pagamento oferecidas</h2></div><div class="conds-pick">'+conds+'</div>'+warnSlot('formas')+'<div id="entrada-cx"></div><div id="ed-price-comparison"></div></div>'+
+    '<div class="sec"><div class="sec-h"><h2>Prazo e validade</h2></div><div class="fgrid"><div class="field"><label for="ed-prazoDias">Prazo de execução</label><input class="in r" id="ed-prazoDias" type="number" inputmode="numeric" min="30" step="1" list="prazo-opcoes" data-f="prazoDias" value="'+esc(d.prazoDias)+'" placeholder="Ex.: 30 ou 45" required><datalist id="prazo-opcoes"><option value="30"><option value="45"></datalist>'+warnSlot('prazo')+'</div>'+
     '<div class="field"><label for="ed-prazoUnidade">Contagem do prazo</label><select class="in" id="ed-prazoUnidade" data-f="prazoUnidade"><option value="uteis">Dias úteis</option><option value="corridos"'+(d.prazoUnidade==='corridos'?' selected':'')+'>Dias corridos</option></select></div>'+
     '<div class="field"><label for="ed-validade">Validade da proposta (dias)</label>'+numIn('validade',d.validade)+'</div></div><p class="muted small">Mínimo de 30 dias. Informe o prazo prometido ao cliente a partir da aprovação do projeto final.</p>'+
     '<div class="field"><label for="ed-obs">Observações para o cliente</label><textarea class="in" id="ed-obs" data-f="obs" placeholder="Prazo de produção, o que está incluso, o que não está">'+esc(d.obs)+'</textarea></div></div>';
   }
-  var stepper='<ol class="stepper" aria-label="Etapas do orçamento">'+STEPS.map(function(s,i){return '<li><button data-act="step" data-s="'+i+'" class="'+(i===st?'on':i<st?'done':'')+'"'+(i===st?' aria-current="step"':'')+'><span class="sn">'+(i+1)+'</span>'+s+'</button></li>'}).join('')+'</ol>';
+  var issues=draftIssues(d);
+  var stepper='<ol class="stepper" aria-label="Etapas do orçamento">'+STEPS.map(function(s,i){var pend=issues[i]&&Object.keys(issues[i]).length&&!locked;return '<li><button data-act="step" data-s="'+i+'" data-step-pend="'+i+'" class="'+(i===st?'on':i<st?'done':'')+(pend?' pend':'')+'"'+(i===st?' aria-current="step"':'')+'><span class="sn">'+(i+1)+'</span>'+s+'</button></li>'}).join('')+'</ol>';
   var nav='<div class="step-nav">'+(st>0?'<button class="btn" data-act="step" data-s="'+(st-1)+'">← '+STEPS[st-1]+'</button>':'<span></span>')+(st<5?'<button class="btn btn-primary" data-act="step" data-s="'+(st+1)+'">Próximo: '+STEPS[st+1]+' →</button>':'')+'</div>';
   var head='<div class="page-head"><div><button class="btn btn-sm btn-ghost" data-act="backQuotes" style="margin:0 0 6px -10px">← Orçamentos</button><h1>'+esc(d.titulo||'Novo orçamento')+'</h1><p><span id="draft-status">'+(isNew?'Salvo automaticamente ao editar':'Criado em '+fd(d.criadoEm))+'</span> · '+pill(d.status)+'</p></div><div class="actions">'+(!locked?'<button class="btn" data-act="saveQuote">Salvar</button>'+(!quoteDeleteReason(d)?'<button class="btn btn-ghost" data-act="deleteQuote" data-id="'+d.id+'">Excluir orçamento</button>':''):'')+'</div></div>';
   if(st===5)return head+stepper+'<div id="review">'+reviewHTML(d)+'</div>'+nav;
@@ -1869,6 +1945,7 @@ function sideHTML(d){
   if(st<=1){
     return '<div class="card"><div class="bigs"><div class="hl"><span class="k">Material</span><span class="big">'+brl0(c.material)+'</span></div></div>'+
     '<div class="brk">'+row('Chapas',brl0(c.chapasCusto))+row('Fita de borda',brl0(c.fitaCusto))+row('Ferragens e insumos',brl0(c.itensCusto))+(c.outros?row('Outros materiais',brl0(c.outros)):'')+row('Reserva para perdas',brl0(c.reserva))+
+    (c.terceiros?'<div class="tot"><span>Terceiros (à parte)</span><span>'+brl0(c.terceiros)+'</span></div>':'')+
     '<p class="muted small" style="margin-top:8px">Mão de obra, preço e lucro aparecem nas próximas etapas.</p></div></div>';
   }
   // Mão de obra: entra o custo total, ainda sem preço.
@@ -1986,6 +2063,11 @@ function descOf(q,f){var o=q&&q.descontos&&q.descontos[f.id];return isAuto(o)?n(
 
 function live(){
   var d=ui.draft;if(!d)return;refreshReview();var C=S.config;var c=calcQuote(d);
+  var iss=draftIssues(d),flat={};Object.keys(iss).forEach(function(k){Object.assign(flat,iss[k])});
+  $$('[data-warn]').forEach(function(el){var msg=flat[el.dataset.warn];el.textContent=msg||'';el.hidden=!msg});
+  $$('[data-step-pend]').forEach(function(el){var k=el.dataset.stepPend;el.classList.toggle('pend',!!(iss[k]&&Object.keys(iss[k]).length)&&d.status!=='aprovado')});
+  $$('[data-sub="terc"]').forEach(function(el){var r=(d.terceirosItens||[])[+el.dataset.i];el.textContent=r?brl(n(r.qtd)*n(r.preco)):''});
+  var tt=$('#terc-total');if(tt)tt.innerHTML=(d.terceirosItens||[]).length?'<span>Total de terceiros'+(c.tercProprio?'<small class="muted terc-paga">Com a margem, o cliente paga '+brl(c.tercProprio+c.tercLucro)+' mais o imposto.</small>':'')+'</span><b>'+brl(c.terceiros)+'</b>':'';
   var laborInfo=$('#labor-info'),labor=c.labor;
   if(laborInfo){
     laborInfo.innerHTML='<div class="sum-line"><span>Mão de obra usada '+brl(labor.direta)+' · Empresa '+brl(labor.rateio)+'</span><b>'+brl(labor.total)+'</b></div>'+
@@ -2032,6 +2114,11 @@ function onEditorInput(e){
     if(f==='rateioModo'||/^maoLancamentos\.\d+\.pessoa$/.test(f)){rerenderEditor();var control=document.getElementById(t.id);if(control)control.focus();return}
     if(f==='valorarEntregas'){rerenderEditor();$('#ed-valorarItens').focus();return}
     if(f==='titulo'){var h=$('.page-head h1');if(h)h.textContent=t.value||'Sem título'}
+  }else if(t.dataset.row==='terceirosItens'){
+    var tr=d.terceirosItens[+t.dataset.i],tk=t.dataset.k;
+    tr[tk]=tk==='qtd'||tk==='preco'?(t.value===''?'':n(t.value)):t.value;
+    if(tk==='nome'){var cat=(S.config.terceiros||[]).find(function(x){return x.nome.toLowerCase()===String(t.value).trim().toLowerCase()});
+      if(cat){tr.un=cat.un||'un.';tr.cat=cat.cat||'';if(!(n(tr.preco)>0)){tr.preco=cat.preco;var pi=$('[data-row="terceirosItens"][data-i="'+t.dataset.i+'"][data-k="preco"]');if(pi)pi.value=cat.preco}var un=$('[data-terc-un="'+t.dataset.i+'"]');if(un)un.textContent=tr.un}}
   }else if(t.dataset.row){var r=d[t.dataset.row][+t.dataset.i];r[t.dataset.k]=t.dataset.k==='qtd'?n(t.value):t.value}
   else if(t.dataset.q){d.respostas[t.dataset.q]=+t.value;rerenderQ();}
   else if(t.dataset.cond){var id=t.dataset.cond;var i=d.condicoes.indexOf(id);if(t.checked&&i<0)d.condicoes.push(id);if(!t.checked&&i>=0)d.condicoes.splice(i,1);var fx=forma(id);if(fx&&(fx.tipo==='entrada'||hasDesc(fx))){rerenderEditor();return}}
@@ -2134,7 +2221,8 @@ function proposalData(q,emissao){
     oficina:propHeader(q,C).nome,telefoneOficina:propHeader(q,C).telefone,cabecalho:propHeader(q,C),descricao:descricao,obs:q.obs||'',
     rtNome:q.rtNome||'',instalacao:c.labor.instalacao>0,
     prazo:prazo||null,prazoUnidade:unit,pessoas:pessoasDe(q),calc:calc,condicoes:conds,
-    itens:items,referencia:reference?reference.forma.nome:null};
+    itens:items,referencia:reference?reference.forma.nome:null,
+    incluso:(q.terceirosItens||[]).filter(function(r){return String(r.nome||'').trim()&&n(r.preco)>0}).map(function(r){return r.cat&&r.cat!=='Outros serviços'?r.cat:String(r.nome).trim()}).filter(function(x,i,a){return a.indexOf(x)===i})};
 }
 function proposalHTML(q){
   var p=q.proposta||proposalData(q,q.enviadoEm||today());
@@ -2143,7 +2231,7 @@ function proposalHTML(q){
   // Propostas arquivadas antes do modelo usam os dados que tinham e a cor atual.
   var h=p.cabecalho||{nome:p.oficina,telefone:p.telefoneOficina,cnpj:'',email:'',instagram:'',site:'',endereco:'',cor:m.cor,logo:!!m.logo};
   var cor=corValida(h.cor)||'#2A5E9A',logo=h.logo&&m.logo?m.logo:'';
-  var inc=['Material, ferragens e fita de borda','Produção na oficina'];if(c.frete>0)inc.push('Frete e entrega');if(p.instalacao)inc.push('Instalação no local');
+  var inc=['Material, ferragens e fita de borda','Produção na oficina'].concat(p.incluso||[]);if(c.frete>0)inc.push('Frete e entrega');if(p.instalacao)inc.push('Instalação no local');
   var qtd=function(v){return Number(v==null?1:v).toLocaleString('pt-BR',{maximumFractionDigits:20})};
   var prazo=p.prazo?esc(p.prazo+' dias '+(p.prazoUnidade||'úteis')):'A confirmar';
   var contatoRodape=[h.telefone,h.email,instagramTxt(h.instagram)].filter(Boolean).map(esc).join(' · ');
@@ -2650,14 +2738,22 @@ function readCxRates(){
 }
 
 /* ---------- Ajustes ---------- */
+var AJ_GROUPS=[
+  ['oficina','Minha oficina',[['oficina','Custos do mês'],['horadia','Custo da hora e do dia'],['equipe','Equipe']],'Custos, equipe e custo da hora'],
+  ['precos','Preços',[['materiais','Chapas, fitas e ferragens'],['terceiros','Terceiros'],['pagamentos','Formas de pagamento'],['margens','Margem e impostos']],'Materiais, serviços e margem'],
+  ['proposta','Proposta e backup',[['proposta','Proposta'],['dados','Backup']],'Modelo da proposta e cópia dos dados']
+];
 function vAjustes(){
   if(!ui.cfg)ui.cfg=clone(S.config);
-  var tabs=[['oficina','Custos fixos e variáveis'],['horadia','Hora e dia'],['equipe','Equipe'],['materiais','Materiais e kits'],['pagamentos','Formas de pagamento'],['margens','Margens e impostos'],['proposta','Proposta'],['dados','Dados e backup']];
-  var body={oficina:aOficina,horadia:aHoraDia,equipe:aEquipe,materiais:aMateriais,pagamentos:aPagamentos,margens:aMargens,proposta:aProposta,dados:aDados}[ui.aTab]();
+  var groups=AJ_GROUPS,group=groups.find(function(g){return g[2].some(function(t){return t[0]===ui.aTab})})||groups[0];
+  if(!group[2].some(function(t){return t[0]===ui.aTab}))ui.aTab=group[2][0][0];
+  var tabs=group[2];
+  var body={oficina:aOficina,horadia:aHoraDia,equipe:aEquipe,materiais:aMateriais,terceiros:aTerceiros,pagamentos:aPagamentos,margens:aMargens,proposta:aProposta,dados:aDados}[ui.aTab]();
   var dirty=JSON.stringify(ui.cfg)!==JSON.stringify(S.config);
   return '<div class="page-head"><div><h1>Ajustes</h1><p>Valores que alimentam todos os cálculos. Mude quando os preços ou a equipe mudarem.</p></div><div class="actions" id="cfg-actions">'+(ui.aTab==='dados'?'':ui.aTab==='equipe'?'<button class="btn btn-primary" data-act="newPessoa">Adicionar pessoa</button>':'<button class="btn btn-ghost" data-act="cfgReset"'+(dirty?'':' disabled')+'>Descartar</button><button class="btn btn-primary" data-act="cfgSave">Salvar alterações</button>')+'</div></div>'+
   (cloudEnabled?'<div class="cloud-acct-m" id="cloud-acct-m"></div>':'')+
-  '<div class="seg" style="margin-bottom:16px">'+tabs.map(function(t){return '<button data-act="aTab" data-tab="'+t[0]+'" class="'+(ui.aTab===t[0]?'on':'')+'">'+t[1]+'</button>'}).join('')+'</div>'+body;
+  '<div class="aj-groups" role="tablist" aria-label="Grupos de ajustes">'+groups.map(function(g){return '<button role="tab" aria-selected="'+(g===group)+'" class="'+(g===group?'on':'')+'" data-act="aGroup" data-group="'+g[0]+'"><b>'+g[1]+'</b><span>'+g[3]+'</span></button>'}).join('')+'</div>'+
+  '<div class="seg aj-sub" style="margin-bottom:16px">'+tabs.map(function(t){return '<button data-act="aTab" data-tab="'+t[0]+'" class="'+(ui.aTab===t[0]?'on':'')+'">'+t[1]+'</button>'}).join('')+'</div>'+body;
 }
 function propModelPreview(C){
   var h=propHeader(null,C),m=propModel(C);
@@ -2816,10 +2912,10 @@ function aMateriais(){
     }).join('')+'</tbody></table></div><div style="padding:10px 14px"><button class="btn btn-sm" data-act="cfgAdd" data-list="'+list+'">+ Adicionar</button></div></div>';
   }
   var cats=MAT_CATS.slice();C.materiais.forEach(function(m){if(m.cat&&cats.indexOf(m.cat)<0)cats.push(m.cat)});
-  var mat='<div class="card"><div class="card-head"><h2>Ferragens e insumos</h2><input class="in" id="mat-q" type="search" placeholder="Buscar item" aria-label="Buscar item" style="max-width:240px" value="'+esc(ui.matQ||'')+'"></div>'+
+  var mat='<div class="card"><div class="card-head"><h2>Ferragens e insumos</h2><div class="cat-filters">'+catFilterHTML('mat-cat',cats,ui.matCat||'','Filtrar ferragens por categoria')+'<input class="in" id="mat-q" type="search" placeholder="Buscar item" aria-label="Buscar item" style="max-width:200px" value="'+esc(ui.matQ||'')+'"></div></div>'+
    '<datalist id="mat-cats">'+cats.map(function(c){return '<option value="'+esc(c)+'">'}).join('')+'</datalist><datalist id="mat-uns"><option value="un."><option value="par"><option value="metro"><option value="jogo"><option value="caixa"><option value="rolo"><option value="kg"><option value="folha"><option value="cartela"></datalist>'+
    '<div class="scroll"><table class="tbl"><thead><tr><th>Categoria</th><th>Item</th><th>Unidade</th><th class="r">Preço (R$)</th><th></th></tr></thead><tbody>'+
-   C.materiais.map(function(m,i){var p='materiais.'+i+'.';var txt=((m.cat||'')+' '+(m.nome||'')).toLowerCase();return '<tr data-mat="'+esc(txt)+'"'+(ui.matQ&&txt.indexOf(ui.matQ.toLowerCase())<0?' hidden':'')+'><td style="width:200px">'+cIn(p+'cat',m.cat||'',{label:'Categoria'}).replace('>',' list="mat-cats">')+'</td><td>'+cIn(p+'nome',m.nome,{label:'Item'})+'</td><td style="width:110px">'+cIn(p+'un',m.un||'un.',{label:'Unidade'}).replace('>',' list="mat-uns">')+'</td><td class="r" style="width:130px">'+cIn(p+'preco',m.preco,{num:1,label:'Preço'})+'</td><td class="r" style="width:40px"><button class="icon-btn" data-act="cfgDel" data-list="materiais" data-i="'+i+'" aria-label="Remover">×</button></td></tr>'}).join('')+
+   C.materiais.map(function(m,i){var p='materiais.'+i+'.';var txt=((m.cat||'')+' '+(m.nome||'')).toLowerCase();return '<tr data-mat="'+esc(txt)+'" data-mat-cat="'+esc(m.cat||'')+'"'+(catRowHidden(m.cat||'',txt,ui.matCat,ui.matQ)?' hidden':'')+'><td style="width:200px">'+cIn(p+'cat',m.cat||'',{label:'Categoria'}).replace('>',' list="mat-cats">')+'</td><td>'+cIn(p+'nome',m.nome,{label:'Item'})+'</td><td style="width:110px">'+cIn(p+'un',m.un||'un.',{label:'Unidade'}).replace('>',' list="mat-uns">')+'</td><td class="r" style="width:130px">'+cIn(p+'preco',m.preco,{num:1,label:'Preço'})+'</td><td class="r" style="width:40px"><button class="icon-btn" data-act="cfgDel" data-list="materiais" data-i="'+i+'" aria-label="Remover">×</button></td></tr>'}).join('')+
    '</tbody></table></div><div style="padding:10px 14px"><button class="btn btn-sm" data-act="cfgAdd" data-list="materiais">+ Adicionar item</button></div></div>';
   var kits='<div class="card"><div class="card-head"><h2>Kits (atalhos)</h2><span class="muted small">No orçamento, um kit preenche vários itens de uma vez. Depois dá para ajustar cada um.</span></div><div class="kit-list">'+
    C.kits.map(function(k,i){var tot=(k.itens||[]).reduce(function(a,r){var m=C.materiais.find(function(x){return x.id===r.id});return a+(m?n(m.preco)*n(r.qtd):0)},0);
@@ -2829,6 +2925,19 @@ function aMateriais(){
    '</div><div style="padding:10px 14px"><button class="btn btn-sm" data-act="cfgAdd" data-list="kits">+ Novo kit</button></div></div>';
   return '<div class="stack">'+tbl('chapas',[['nome','Chapa'],['preco','Preço da chapa (R$)',1],['semFita','Fita']],'Chapas','Referências de lojas: nov. de 2026, sem frete. Atualize com o preço do seu fornecedor.')+
    tbl('fitas',[['nome','Fita'],['metros','Metros do rolo',1],['preco','Preço do rolo (R$)',1]],'Fitas de borda','Cada orçamento cobra o rolo inteiro. A estimativa usa '+dec(C.fitaPorChapa,0)+' m por chapa')+mat+kits+'</div>';
+}
+function catFilterHTML(id,cats,value,label){return '<select class="in" id="'+id+'" aria-label="'+label+'" style="max-width:220px"><option value="">Todas as categorias</option>'+cats.map(function(c){return '<option value="'+esc(c)+'"'+(c===value?' selected':'')+'>'+esc(c)+'</option>'}).join('')+'</select>'}
+function catRowHidden(cat,txt,fcat,q){return (fcat&&cat!==fcat)||(q&&txt.indexOf(q.toLowerCase())<0)}
+function aTerceiros(){
+  var C=ui.cfg;if(!Array.isArray(C.terceiros))C.terceiros=[];
+  var cats=TERC_CATS.slice();C.terceiros.forEach(function(m){if(m.cat&&cats.indexOf(m.cat)<0)cats.push(m.cat)});
+  return '<div class="stack"><div class="card"><div class="card-head"><div><h2>Serviços e materiais de terceiros</h2><span class="muted small">Preço de referência. No orçamento, o valor pode ser trocado em cada linha.</span></div>'+
+   '<div class="cat-filters">'+catFilterHTML('terc-cat',cats,ui.tercCat||'','Filtrar terceiros por categoria')+'<input class="in" id="terc-q" type="search" placeholder="Buscar" aria-label="Buscar terceiro" style="max-width:200px" value="'+esc(ui.tercQ||'')+'"></div></div>'+
+   '<datalist id="terc-cats">'+cats.map(function(c){return '<option value="'+esc(c)+'">'}).join('')+'</datalist><datalist id="terc-uns"><option value="un."><option value="m²"><option value="metro"><option value="ponto"><option value="serviço"></datalist>'+
+   '<div class="scroll"><table class="tbl"><thead><tr><th>Categoria</th><th>Serviço ou material</th><th>Unidade</th><th class="r">Preço (R$)</th><th></th></tr></thead><tbody>'+
+   C.terceiros.map(function(m,i){var p='terceiros.'+i+'.',txt=((m.cat||'')+' '+(m.nome||'')).toLowerCase();return '<tr data-terc="'+esc(txt)+'" data-terc-cat="'+esc(m.cat||'')+'"'+(catRowHidden(m.cat||'',txt,ui.tercCat,ui.tercQ)?' hidden':'')+'><td style="width:200px">'+cIn(p+'cat',m.cat||'',{label:'Categoria'}).replace('>',' list="terc-cats">')+'</td><td>'+cIn(p+'nome',m.nome,{label:'Serviço'})+'</td><td style="width:110px">'+cIn(p+'un',m.un||'un.',{label:'Unidade'}).replace('>',' list="terc-uns">')+'</td><td class="r" style="width:130px">'+cIn(p+'preco',m.preco,{num:1,label:'Preço'})+'</td><td class="r" style="width:40px"><button class="icon-btn" data-act="cfgDel" data-list="terceiros" data-i="'+i+'" aria-label="Remover">×</button></td></tr>'}).join('')+
+   '</tbody></table></div><div style="padding:10px 14px"><button class="btn btn-sm" data-act="cfgAdd" data-list="terceiros">+ Adicionar serviço</button></div></div>'+
+   '<div class="card"><div class="sec"><div class="fgrid">'+cField('Margem sobre terceiros (%)','margemTerceiros',C.margemTerceiros==null?10:C.margemTerceiros,1)+'</div><p class="muted small">Vale para os orçamentos novos. O móvel continua com a margem da etapa Valor; os terceiros recebem só esta margem.</p></div></div></div>';
 }
 function aHoraDia(){
   var C=ui.cfg;
@@ -2868,7 +2977,7 @@ function aPagamentos(){
 }
 function aMargens(){
   var C=ui.cfg;
-  return '<div class="stack"><div class="card"><div class="sec"><h2>Preço</h2><div class="fgrid">'+cField('Imposto sobre a venda (%)','imposto',C.imposto,1)+cField('Margem base (%)','margemBase',C.margemBase,1)+cField('Margem mínima (%)','margemMinima',C.margemMinima,1)+cField('Reserva para perdas (%)','reserva',C.reserva,1)+'</div></div>'+
+  return '<div class="stack"><div class="card"><div class="sec"><h2>Preço</h2><div class="fgrid">'+cField('Imposto sobre a venda (%)','imposto',C.imposto,1)+cField('Margem base (%)','margemBase',C.margemBase,1)+cField('Margem mínima (%)','margemMinima',C.margemMinima,1)+cField('Reserva para perdas (%)','reserva',C.reserva,1)+cField('Margem sobre terceiros (%)','margemTerceiros',C.margemTerceiros==null?10:C.margemTerceiros,1)+'</div></div>'+
   '<div class="sec"><h2>Referências</h2><div class="fgrid">'+cField('N da comparação material × N','multN',C.multN,1)+cField('Metros de fita por chapa','fitaPorChapa',C.fitaPorChapa,1)+cField('Validade padrão da proposta (dias)','validade',C.validade,1)+'</div></div></div>'+
   '<div class="card"><div class="card-head"><h2>Questionário de valor</h2><span class="muted small">Quanto cada resposta soma ou tira da margem base, em pontos percentuais</span></div><div class="scroll"><table class="tbl"><thead><tr><th>Pergunta</th><th colspan="3">Respostas e pesos</th></tr></thead><tbody>'+Q.map(function(qq){return '<tr><td><b>'+esc(qq.t)+'</b></td>'+qq.o.map(function(o,i){return '<td><span class="small muted">'+esc(o)+'</span>'+cIn('pesos.'+qq.id+'.'+i,C.pesos[qq.id][i],{num:1,label:qq.t+': '+o})+'</td>'}).join('')+'</tr>'}).join('')+'</tbody></table></div></div></div>';
 }
@@ -2964,9 +3073,11 @@ var A={
     rerenderEditor();autoSaveDraft();
     var add=$('[data-act="addDelivery"]');if(add)add.focus();
   },
+  addTerceiro:function(){var d=ui.draft;if(!d||readOnly)return;d.terceirosItens=d.terceirosItens||[];d.terceirosItens.push({nome:'',desc:'',qtd:1,un:'un.',preco:''});rerenderEditor();autoSaveDraft();var rows=$$('[data-row="terceirosItens"][data-k="nome"]');if(rows.length)rows[rows.length-1].focus()},
   addRow:function(b){var C=S.config;var r=b.dataset.row;var first=({chapas:C.chapas,fitas:C.fitas}[r]||[])[0];if(!first){toast('Cadastre itens em Ajustes primeiro.');return}ui.draft[r]=ui.draft[r]||[];ui.draft[r].push({id:first.id,qtd:1});rerenderEditor();autoSaveDraft()},
   findMaterial:function(){
-    openModal({title:'Buscar material',body:field('Nome ou categoria','material-search','',{type:'search',ph:'Ex.: dobradiça amortecedor'})+
+    var cats=[];S.config.materiais.forEach(function(m){var c=m.cat||'Outros';if(cats.indexOf(c)<0)cats.push(c)});ui.findCat='';
+    openModal({title:'Buscar material',body:'<div class="fgrid">'+field('Nome','material-search','',{type:'search',ph:'Ex.: dobradiça amortecedor'})+'<div class="field"><label for="material-cat">Categoria</label>'+catFilterHTML('material-cat',cats,'','Categoria').replace(' style="max-width:220px"','')+'</div></div>'+
       '<div class="list" id="material-results">'+materialResults('')+'</div>'});
   },
   pickMaterial:function(b){
@@ -2985,7 +3096,7 @@ var A={
   profitAreas:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;var c=calcQuote(d);d.lucros=profitDefaults(c);d.precoModo='areas';rerenderEditor();autoSaveDraft()},
   profitGlobal:function(){var d=ui.draft;if(!d||readOnly||d.status!=='rascunho')return;delete d.precoModo;rerenderEditor();autoSaveDraft()},
   margSug:function(){ui.draft.margemManual='';rerenderEditor();autoSaveDraft()},
-  useRefN:function(){var c=calcQuote(ui.draft);var m=(1-c.imp-c.rt-c.custo/c.refN)*100;if(m<=0){toast('Nesse valor a empresa teria prejuízo.');return}ui.draft.margemManual=Math.round(m*10)/10;rerenderEditor();autoSaveDraft();toast('Preço ajustado para material × '+dec(c.N)+'. Margem de '+pct(ui.draft.margemManual)+'.')},
+  useRefN:function(){var c=calcQuote(ui.draft);var L=1-c.imp-c.rt,tp=n(c.tercProprio),rest=c.refN-(tp+n(c.tercLucro))/L;var m=rest>0?(L-(c.custo-tp)/rest)*100:-1;if(m<=0){toast('Nesse valor a empresa teria prejuízo.');return}ui.draft.margemManual=Math.round(m*10)/10;rerenderEditor();autoSaveDraft();toast('Preço ajustado para material × '+dec(c.N)+'. Margem de '+pct(ui.draft.margemManual)+'.')},
   useSug:function(){var h=sugHoras(ui.draft);ui.draft.horasOficina=h.of;ui.draft.horasInstalacao=h.inst;ui.autoHoras=false;rerenderEditor();autoSaveDraft()},
   laborMode:function(b){
     var d=ui.draft,mode=b.dataset.mode;
@@ -3146,6 +3257,10 @@ var A={
       var v=e.vinculo==='Diarista'?n(e.valor)*n(e.diasMes):n(e.valor);S.pagar.push({id:uid(),key:key,desc:(e.vinculo==='Diarista'?'Diárias':'Salário')+' — '+e.nome,categoria:'Equipe',venc:venc,valor:v,status:'pendente'});k++});
     save(k?k+' pagamento'+(k===1?'':'s')+' da equipe lançado'+(k===1?'':'s')+' para '+fd(venc)+'.':'Os pagamentos deste mês já estavam lançados.')},
   aTab:function(b){ui.aTab=b.dataset.tab;render();cfgLive()},
+  aGroup:function(b){var g=AJ_GROUPS.find(function(x){return x[0]===b.dataset.group});if(!g)return;ui.aTab=g[2][0][0];render();cfgLive()},
+  goSetup:function(b){ui.aTab=b.dataset.tab;ui.cfg=null;location.hash='#ajustes';render();cfgLive();window.scrollTo(0,0)},
+  setupDone:function(b){if(readOnly)return;S.config.setup=S.config.setup||{};S.config.setup[b.dataset.key]=true;save()},
+  setupHide:function(){if(readOnly)return;S.config.setup=S.config.setup||{};S.config.setup.oculto=true;save()},
   exportBackup:exportBackup,
   pickBackup:function(){if(!readOnly)$('#backup-file').click()},
   confirmRestore:function(){if(ui.backup)replaceState(ui.backup,'Backup restaurado.')},
@@ -3155,7 +3270,7 @@ var A={
       foot:'<button class="btn btn-ghost" data-act="closeModal">Cancelar</button><button class="btn btn-primary" data-act="confirmOperation">Exportar backup e começar</button>'});
   },
   confirmOperation:function(){if(!S.operacao)replaceState(emptyOperation(),'Operação iniciada. Revise os custos em Ajustes.')},
-  cfgAdd:function(b){var l=b.dataset.list;var it=l==='custosFixos'?{id:uid(),nome:'',valor:0}:l==='formas'?{id:uid(),nome:'',taxa:0,desconto:0,parcelas:1}:l==='fitas'?{id:uid(),nome:'',metros:50,preco:0}:l==='materiais'?{id:uid(),cat:'',nome:'',un:'un.',preco:0}:l==='kits'?{id:uid(),nome:'',itens:[]}:{id:uid(),nome:'',preco:0};ui.cfg[l].push(it);if(l==='materiais')ui.matQ='';if(l==='chapas')ui.chapaMarca='Cadastro da oficina';render();cfgLive();if(l==='materiais'||l==='chapas'){var rs=$$(l==='chapas'?'[data-chapa-marca]':'[data-mat]');var last=rs[rs.length-1];if(last){var inp=last.querySelectorAll('input')[l==='chapas'?0:1];if(inp)inp.focus()}}},
+  cfgAdd:function(b){var l=b.dataset.list;if(l==='terceiros'){ui.cfg.terceiros=ui.cfg.terceiros||[];ui.cfg.terceiros.push({id:uid(),cat:ui.tercCat||'',nome:'',un:'un.',preco:0});ui.tercQ='';render();cfgLive();return}var it=l==='custosFixos'?{id:uid(),nome:'',valor:0}:l==='formas'?{id:uid(),nome:'',taxa:0,desconto:0,parcelas:1}:l==='fitas'?{id:uid(),nome:'',metros:50,preco:0}:l==='materiais'?{id:uid(),cat:'',nome:'',un:'un.',preco:0}:l==='kits'?{id:uid(),nome:'',itens:[]}:{id:uid(),nome:'',preco:0};ui.cfg[l].push(it);if(l==='materiais')ui.matQ='';if(l==='chapas')ui.chapaMarca='Cadastro da oficina';render();cfgLive();if(l==='materiais'||l==='chapas'){var rs=$$(l==='chapas'?'[data-chapa-marca]':'[data-mat]');var last=rs[rs.length-1];if(last){var inp=last.querySelectorAll('input')[l==='chapas'?0:1];if(inp)inp.focus()}}},
   cfgKitItemAdd:function(b){var k=ui.cfg.kits[+b.dataset.i];var m=ui.cfg.materiais[0];if(!k||!m)return;k.itens=k.itens||[];k.itens.push({id:m.id,qtd:1});render();cfgLive()},
   cfgKitItemDel:function(b){var k=ui.cfg.kits[+b.dataset.i];if(k)k.itens.splice(+b.dataset.j,1);render();cfgLive()},
   cfgDel:function(b){ui.cfg[b.dataset.list].splice(+b.dataset.i,1);render();cfgLive()},
@@ -3164,7 +3279,7 @@ var A={
   logoRemove:function(){if(ui.cfg.proposta)ui.cfg.proposta.logo='';render();cfgLive()},
   propCorQ:function(b){var d=ui.draft;if(!d||d.status==='aprovado')return;d.propCor=b.dataset.cor||'';rerenderEditor();autoSaveDraft()},
   cfgSave:function(){
-    var C=ui.cfg;['chapas','fitas','kits','formas','custosFixos','materiais'].forEach(function(l){C[l]=(C[l]||[]).filter(function(x){return String(x.nome||'').trim()})});C.kits.forEach(function(k){k.itens=(k.itens||[]).filter(function(r){return r.id&&n(r.qtd)>0&&C.materiais.some(function(m){return m.id===r.id})})});
+    var C=ui.cfg;['chapas','fitas','kits','formas','custosFixos','materiais','terceiros'].forEach(function(l){C[l]=(C[l]||[]).filter(function(x){return String(x.nome||'').trim()})});C.kits.forEach(function(k){k.itens=(k.itens||[]).filter(function(r){return r.id&&n(r.qtd)>0&&C.materiais.some(function(m){return m.id===r.id})})});
     S.config=clone(C);save('Ajustes salvos. Orçamentos em aberto com preço alterado aparecem no Início.');cfgLive()},
   newPessoa:function(){pessoaModal(null)},
   editPessoa:function(b){pessoaModal(S.equipe.find(function(e){return e.id===b.dataset.id}))},
@@ -3206,7 +3321,9 @@ document.addEventListener('input',function(e){
   if(t.id==='ap-forma'||t.id==='ap-prim'||t.id==='ap-ent'){apCx();return}
   if(t.id==='q-search'){ui.qSearch=t.value;var p=t.selectionStart;render();var s=$('#q-search');s.focus();try{s.setSelectionRange(p,p)}catch(x){}return}
   if(t.id==='c-search'){ui.cSearch=t.value;var p2=t.selectionStart;render();var s2=$('#c-search');s2.focus();try{s2.setSelectionRange(p2,p2)}catch(x){}return}
-  if(t.id==='mat-q'){ui.matQ=t.value;var qq=t.value.trim().toLowerCase();$$('[data-mat]').forEach(function(r){r.hidden=!!qq&&r.dataset.mat.indexOf(qq)<0});return}
+  if(t.id==='mat-q'||t.id==='mat-cat'){if(t.id==='mat-q')ui.matQ=t.value;else ui.matCat=t.value;var qq=String(ui.matQ||'').trim();$$('[data-mat]').forEach(function(r){r.hidden=catRowHidden(r.dataset.matCat,r.dataset.mat,ui.matCat,qq)});return}
+  if(t.id==='terc-q'||t.id==='terc-cat'){if(t.id==='terc-q')ui.tercQ=t.value;else ui.tercCat=t.value;var tq2=String(ui.tercQ||'').trim();$$('[data-terc]').forEach(function(r){r.hidden=catRowHidden(r.dataset.tercCat,r.dataset.terc,ui.tercCat,tq2)});return}
+  if(t.id==='material-cat'){ui.findCat=t.value;var ms=$('#material-search');$('#material-results').innerHTML=materialResults(ms?ms.value:'');return}
   if(t.closest&&t.closest('#ed-form,#proposal-fields')){onEditorInput(e);if(t.matches('[data-f],[data-row],[data-q],[data-cond],[data-dias],[data-delivery]'))autoSaveDraft();return}
   if(t.dataset&&t.dataset.rv&&ui.draft){var v=t.value===''?'':n(t.value);if(t.dataset.rv==='margem'){ui.draft.margemManual=v;$$('[data-rv="margem"]').forEach(function(x){if(x!==t)x.value=v})}else ui.draft.multN=v;refreshReview();autoSaveDraft();return}
   if(t.dataset&&t.dataset.c){

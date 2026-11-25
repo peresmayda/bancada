@@ -15,7 +15,7 @@ export function app() {
     S=seed();
     openModal=function(spec){window.modal=spec};
     window.api={cancelApprovedQuote,restoreApprovedQuote,clientArchiveRecord,aprovar,viewQuote,vOrcamentos,vObras,vInicio,clientTrash,openCliente,materialIdentity,importMaterialMatches,createImportedMaterial,migrateMdf,defMdf,mobcloudPreview,pieceTable,materialTable,projectMaterials,estimateMaterialSheets,reviewProjectImport,
-      oficina,calcQuote,calcCond,quoteLabor,laborResources,newDraft,reviewHTML,sideHTML,vEditor,live,ui,restoreDraftLabor,profitDefaults,ensureFixedBills,fixedBillDate,cxReserve,cxMonthly,cxMonthCard,dGeral,dPagar,CX,mesAtual,cxPayments,saveClientRecord,clientContact,quoteDeleteReason,deleteQuoteRecord,restoreQuoteRecord,importedDraftBase,proposalData,proposalHTML,propHeader,propModel,aProposta,companySurvival,vClientes,readBackup,
+      oficina,calcQuote,calcCond,quoteLabor,laborResources,newDraft,reviewHTML,sideHTML,vEditor,live,ui,restoreDraftLabor,profitDefaults,ensureFixedBills,fixedBillDate,cxReserve,cxMonthly,cxMonthCard,dGeral,dPagar,CX,mesAtual,cxPayments,saveClientRecord,clientContact,quoteDeleteReason,deleteQuoteRecord,restoreQuoteRecord,importedDraftBase,proposalData,proposalHTML,propHeader,propModel,aProposta,draftIssues,setupSteps,setupHTML,vAjustes,materialResults,forma,companySurvival,vClientes,readBackup,
       getState:function(){return S},setState:function(state){S=state}};
   })();`, context);
   return { api: context.window.api, window: context.window };
